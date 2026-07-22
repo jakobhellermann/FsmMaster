@@ -1,12 +1,10 @@
 # Changelog
 
-## Unreleased
+## v0.3.6
 
-- Licensing correction: `PlayMakerFsmOps.cs` in FsmMaster.Core is a trimmed-down
-  port of [Silksong.FsmUtil](https://github.com/silksong-modding/Silksong.FsmUtil)
-  (EUPL-1.2, © silksong-modding); prior releases shipped it under MIT without the
-  required EUPL notices. FsmMaster is now licensed as a whole under the EUPL-1.2,
-  with attribution restored in `NOTICE`, per-file SPDX headers, and the README.
+- Licensing correction: Attribution for FsmUtil, changed license to EUPL 1.2 to match
+- Added support for Gusten patch, custom scene bugfixes, API
+- small tweaks for modlinks
 
 ## v0.3.5
 

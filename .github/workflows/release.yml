@@ -107,9 +107,27 @@ jobs:
           ls -l staging
 
       - name: Attest build provenance
+        id: attest
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: staging/*.zip
+
+      - name: Build release notes
+        run: |
+          CHANGELOG_PATH="thunderstore/CHANGELOG.md"
+          # The topmost "### " section is whatever's newest - "Unreleased" if it hasn't been
+          # renamed yet, or "v<version>" if it has. Either way it's what this tag ships.
+          awk '/^### /{n++} n==1' "$CHANGELOG_PATH" > changelog-excerpt.md
+
+          {
+            echo "FsmMaster $VERSION for: $PLATFORMS. Install instructions are in the README."
+            echo
+            cat changelog-excerpt.md
+            echo
+            echo "[View build attestation](${{ steps.attest.outputs.attestation-url }})"
+            echo
+            echo "[Full changelog](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/thunderstore/CHANGELOG.md)"
+          } > release-notes.md
 
       - name: Publish to Thunderstore
         if: contains(env.PLATFORMS, 'silksong')
@@ -131,7 +149,7 @@ jobs:
         run: |
           gh release create "$TAG" staging/*.zip \
             --title "FsmMaster $VERSION" \
-            --notes "FsmMaster $VERSION for: $PLATFORMS. Install instructions are in the README."
+            --notes-file release-notes.md
 
       - name: Open modlinks PR (hk1578)
         # Bumps the existing FsmMaster <Manifest> entry in hk-modding/modlinks - requires the
