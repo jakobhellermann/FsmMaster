@@ -24,6 +24,12 @@ internal class CanvasPanel : CanvasNode
 
     protected override IEnumerable<CanvasNode> ChildList() => _elements;
 
+    // Exposes the raw add-order list (as opposed to ChildList's IEnumerable, which existing callers only
+    // ever foreach over) - lets a caller that adds a contiguous run of children (e.g.
+    // FsmActiveStatePanel.BuildActionsRows, one action's whole block+rows) snapshot which ones those were
+    // by index range, without this panel needing to know anything about that grouping itself.
+    public List<CanvasNode> Elements => _elements;
+
     public T Add<T>(T element) where T : CanvasNode
     {
         element.Parent = this;

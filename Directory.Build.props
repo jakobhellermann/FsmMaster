@@ -21,7 +21,7 @@
     Directory.Build.targets. Pass -p:Version=x.y.z on the build command line to override it for a
     single build without editing this file.
     -->
-    <Version>0.3.5</Version>
+    <Version>0.3.6</Version>
     <!-- Otherwise the SDK appends "+<git-sha>" to AssemblyInformationalVersion (visible as
          FileVersionInfo.ProductVersion) since RepositoryUrl is set above and this is a git
          checkout - every release must report plain major.minor.patch, not a build-metadata

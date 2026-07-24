@@ -48,13 +48,58 @@ internal sealed class UICommon
     public Color StringValueColor { get; } = new(210f / 255f, 160f / 255f, 120f / 255f, 1f);
     public Color ReadOnlyColor { get; } = new(140f / 255f, 140f / 255f, 145f / 255f, 0.75f);
 
+    // Everything below this point is FsmActiveStatePanel's right-click-disabled-action look
+    // (FsmEditManager.SetActionEnabled) - applied ONLY to a disabled action's own header/rows, never to
+    // an enabled action or to the Variables tab, which keep the normal palette above untouched.
+
+    // A disabled action's own header/type-name text (AddActionHeaderRow) - a dark red "this is off"
+    // flag, replacing TypeBadgeColor's teal for that one header only.
+    public Color ActionNameColor { get; } = new(140f / 255f, 45f / 255f, 45f / 255f, 1f);
+
+    // A disabled action's field labels, editable value text, bool true/false text, and Sequencer button
+    // label all share this one grey (AddActionFieldRow/AddActionFieldArrayRows/AddActionHeaderRow) -
+    // distinct from ReadOnlyColor, which marks a field PlayMaker itself won't let this mod edit; a
+    // disabled action's fields stay fully editable, they're just currently skipped by PlayMaker. Also
+    // used for CanvasToggleDot's fill/ring tint on that action's own tracking dots.
+    public Color ActionDisabledTextColor { get; } = new(140f / 255f, 140f / 255f, 145f / 255f, 0.75f);
+
+    // Flat fill for a disabled action's own bool-toggle button and its editable text fields' input-box
+    // background - replaces ButtonNormal/ButtonActive there so neither looks like a normal, "live"
+    // control while the action is off; much lower alpha than ButtonNormal so an editable field reads as
+    // an inert, deselected value at rest rather than a button.
+    public Color ActionDisabledFieldBackgroundColor { get; } = new(42f / 255f, 45f / 255f, 53f / 255f, 0.35f);
+
+    // A disabled action's own Sequencer button (AddActionHeaderRow, Random-event-family actions only) -
+    // replaces ButtonNormal/ButtonActive there too, darker when the sequencer block is closed ("off")
+    // and lighter when it's open ("on"), so the button still communicates its own toggle state without
+    // using the normal blue ButtonActive, which elsewhere in this panel means "enabled and focused."
+    public Color ActionDisabledSequencerOffColor { get; } = new(35f / 255f, 35f / 255f, 38f / 255f, 0.7f);
+    public Color ActionDisabledSequencerOnColor { get; } = new(75f / 255f, 75f / 255f, 80f / 255f, 0.85f);
+
     // FsmActiveStatePanel's per-action/per-variable-type outline blocks (CanvasSectionBlock) - a subtle
     // step up from PanelBackground so a block reads as its own surface without competing with
     // AccentColor/ButtonActive's stronger blue, which already means "focused/toggled-on" elsewhere in
-    // this panel. Selected is "a bit lighter" than normal, not a color swap, so selection reads as the
-    // same block raised up rather than a different kind of highlight.
+    // this panel. Selected is a desaturated navy rather than AccentColor's own bright blue, so it reads
+    // as "this block has focus" without competing with that same stronger blue elsewhere in the panel.
     public Color SectionBlockColor { get; } = new(36f / 255f, 39f / 255f, 46f / 255f, 0.5f);
-    public Color SectionBlockSelectedColor { get; } = new(58f / 255f, 62f / 255f, 72f / 255f, 0.75f);
+    public Color SectionBlockSelectedColor { get; } = new(48f / 255f, 58f / 255f, 80f / 255f, 0.8f);
+
+    // An action's block background once right-click-disabled (FsmEditManager.SetActionEnabled) - flatter
+    // and darker than SectionBlockColor so a disabled action visually recedes.
+    public Color SectionBlockDisabledColor { get; } = new(26f / 255f, 27f / 255f, 30f / 255f, 0.6f);
+
+    // Same, but for a disabled action's block that's ALSO the currently-selected one - a dark grey-navy
+    // blend of SectionBlockDisabledColor's grey and SectionBlockSelectedColor's navy, rather than either
+    // one winning outright, so a selected-and-disabled action still reads as both at once.
+    public Color SectionBlockSelectedDisabledColor { get; } = new(34f / 255f, 38f / 255f, 48f / 255f, 0.75f);
+
+    // An action block currently being drag-reordered (FsmActiveStatePanel's own Actions-tab drag, not
+    // this action's Enabled state or its own selection) - full alpha, unlike every other SectionBlock*
+    // color above, so the floating block reads as solid rather than letting whatever it's currently
+    // overlapping show through. Takes priority over Selected/Disabled while dragging (see
+    // CanvasSectionBlock.RefreshTint) since a block being dragged is never usefully "still selected" or
+    // "still disabled" to the eye at the same time.
+    public Color SectionBlockDraggingColor { get; } = new(52f / 255f, 62f / 255f, 86f / 255f, 1f);
 
     // Label color for an action field PlayMaker never serializes/shows in its own editor (private
     // runtime bookkeeping like Wait's startTime/timer) - see FsmActionFieldInfo.IsHidden. A muted

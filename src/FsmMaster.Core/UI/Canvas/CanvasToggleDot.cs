@@ -15,6 +15,7 @@ internal sealed class CanvasToggleDot : CanvasNode
     private readonly UICommon _ui;
     private Image? _image;
     private bool _on;
+    private Color _tint;
 
     public event Action? OnClicked;
 
@@ -23,6 +24,7 @@ internal sealed class CanvasToggleDot : CanvasNode
     public CanvasToggleDot(string name, UICommon ui) : base(name)
     {
         _ui = ui;
+        _tint = ui.AccentColor;
     }
 
     public bool On
@@ -38,13 +40,30 @@ internal sealed class CanvasToggleDot : CanvasNode
         }
     }
 
+    // Defaults to AccentColor - overridden per-instance (ActionDisabledTextColor, for a dot belonging
+    // to a right-click-disabled action's own field row - see FsmActiveStatePanel.AddToggleDot) rather
+    // than baked into a shared static color, so only that action's own dots grey out and every other
+    // dot in the panel (Variables tab, an enabled action) keeps the normal look.
+    public Color Tint
+    {
+        get => _tint;
+        set
+        {
+            _tint = value;
+            if (_image != null)
+            {
+                _image.color = _tint;
+            }
+        }
+    }
+
     public override void Build(Transform? rootParent = null)
     {
         base.Build(rootParent);
 
         _image = GameObject!.AddComponent<Image>();
         _image.sprite = _on ? _ui.DotFilledSprite : _ui.DotRingSprite;
-        _image.color = _ui.AccentColor;
+        _image.color = _tint;
 
         AddEventTrigger(EventTriggerType.PointerClick, (PointerEventData _) => OnClicked?.Invoke());
     }

@@ -28,6 +28,8 @@ internal sealed class FsmEditSet
     public string FsmKey = "";
     public List<VariableOverride> VariableOverrides = new();
     public List<ActionFieldOverride> ActionFieldOverrides = new();
+    public List<ActionEnabledOverride> ActionEnabledOverrides = new();
+    public List<ActionReorder> ActionReorders = new();
     public List<string> DisabledStates = new();
     public List<TransitionRetarget> TransitionRetargets = new();
     public List<SequencerOverride> SequencerOverrides = new();
@@ -39,6 +41,8 @@ internal sealed class FsmEditSet
     public bool IsEmpty =>
         VariableOverrides.Count == 0
         && ActionFieldOverrides.Count == 0
+        && ActionEnabledOverrides.Count == 0
+        && ActionReorders.Count == 0
         && DisabledStates.Count == 0
         && TransitionRetargets.Count == 0
         && SequencerOverrides.Count == 0;
@@ -71,6 +75,38 @@ internal sealed class ActionFieldOverride
     // raw primitive array or an Array-typed FsmVariable, which is a distinct, variable-only shape).
     public int ArrayIndex = -1;
     public string StringValue = "";
+}
+
+// A live-edited Enabled flag for a single state's action - separate from ActionFieldOverride because
+// FsmStateAction.Enabled is a base-class property with a private backing field, invisible to the
+// reflection ActionFieldOverride relies on (GetField only walks a derived action type's own declared
+// fields), not because it needs array-element or per-type-tag handling of its own.
+[Serializable]
+internal sealed class ActionEnabledOverride
+{
+    public string StateName = "";
+    public int ActionIndex;
+    public string ExpectedActionTypeName = "";
+    public bool Enabled;
+}
+
+// KNOWN BROKEN - see FsmEditManager.MoveAction/ApplyActionReorder's own comments for the full diagnosis
+// (physically reassigning FsmState.Actions fights PlayMaker's own activeActionIndex bookkeeping) and the
+// recommended custom-action-based redesign. Also not yet wire-serialized at all - FsmSaveDataStore's
+// FsmEditSetWire/ToWire/FromWire predates this type and was never updated for it, so a reorder silently
+// doesn't survive Save/Load even setting the crash aside. Left in place as-is rather than reworked now -
+// see feature_todo.md's "Rearrange actions" entry.
+//
+// A state's action order once at least one action has been moved from its original position - absolute
+// rather than a delta, same reasoning as VariableOverride storing a final value instead of a diff.
+// OriginalIndices[i] is the index this action held in the state's original (pristine) action array
+// before any reorder; the action now displayed/live at position i is original[OriginalIndices[i]]. One
+// entry per StateName - a state with no ActionReorder entry is still in its original order.
+[Serializable]
+internal sealed class ActionReorder
+{
+    public string StateName = "";
+    public List<int> OriginalIndices = new();
 }
 
 // Covers both retargeting where a transition leads (its to-state) and relocating which state it leads

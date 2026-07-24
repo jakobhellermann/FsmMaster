@@ -19,6 +19,14 @@ internal sealed class FsmPristineSnapshot
     // are assumed structurally identical, so one shared index list applies to every instance's own actions).
     public Dictionary<string, List<int>> NeuteredActionIndices { get; } = new();
 
+    // stateName -> one captured original action array per live instance ever reordered (duplicate FSM
+    // instances each own their own FsmStateAction objects, unlike NeuteredActionIndices' shared index
+    // list, so this can't be a single shared array - see FsmEditManager.ApplyActionReorder). Captured
+    // lazily on that instance's first reorder, in whatever order state.Actions was in at that moment -
+    // which is always the true pristine order, since nothing else that touches state.Actions (Enabled
+    // toggling, DisableState, sequencer install) ever changes element order, only appends/mutates in place.
+    public Dictionary<string, List<FsmStateAction[]>> OriginalActionOrders { get; } = new();
+
     // The synthetic exit action injected into each neutered state instance - one entry per live instance
     // touched, since every duplicate gets its own action object.
     public List<FsmStateAction> InjectedExitActions { get; } = new();

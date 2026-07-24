@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: EUPL-1.2
+﻿// SPDX-License-Identifier: EUPL-1.2
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -151,6 +151,31 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
     // RebuildContent call alongside the rows themselves, so ScrollToAction always has an up-to-date
     // block to scroll to and select even after a state/tab switch changes every row's position.
     private readonly Dictionary<int, CanvasSectionBlock> _actionBlocks = new();
+
+    // Every widget belonging to one action - its own block plus every header/field/dot/button row added
+    // between that action's BeginBlock and EndBlock - paired with the LocalPosition each one was actually
+    // built at, keyed by action index alongside _actionBlocks above. A drag reorder needs to move an
+    // action's header text and field rows along with its block (see ReflowActionBlocksForDrag) - they're
+    // all siblings under the same content panel, not children of the block, so moving the block alone
+    // would leave every row it "contains" visually behind. Rebuilt every RebuildContent pass.
+    private readonly Dictionary<int, List<(CanvasNode Node, Vector2 RestPosition)>> _actionRowWidgets = new();
+
+    // ---- Actions tab reorder-drag state ----
+    // A continuous "others slide to fill" reorder, unlike the Sequencer tab's own drop-to-index gesture
+    // (see the "Sequencer drag/drop" region below) - every other action's whole widget group
+    // (_actionRowWidgets) has its LocalPosition recomputed each Drag frame from _actionDragHeights (each
+    // block's own height, captured once at BeginActionDrag since a block's height never changes
+    // mid-drag) with the dragged action's own slot excluded and a same-sized gap reserved at
+    // _actionDragPreviewIndex, while the dragged action's own widgets just follow the pointer directly.
+    // Purely a live visual preview - nothing here touches FsmEditManager until EndActionDrag commits (or
+    // discards) it, and RebuildContent unconditionally restores every block to its real position
+    // afterward regardless of outcome.
+    private string? _actionDragFsmKey;
+    private string? _actionDragStateName;
+    private int _actionDragSourceIndex = -1;
+    private int _actionDragPreviewIndex = -1;
+    private float _actionDragGrabOffsetY;
+    private readonly List<float> _actionDragHeights = new();
 
     // Currently-selected section block, if any - cleared (without a Selected=false, since RebuildContent
     // already destroyed the old block along with every other row) on every rebuild, since a rebuild
@@ -488,6 +513,7 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
         content.ClearChildren();
         _valueRefreshers.Clear();
         _actionBlocks.Clear();
+        _actionRowWidgets.Clear();
         _selectedBlock = null;
         _sequencerBlockWidgets.Clear();
         _sequenceColumnHitAreas.Clear();
@@ -567,7 +593,26 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
                 randomActionRank++;
             }
 
+            int groupStart = content.Elements.Count;
             CanvasSectionBlock block = BeginBlock(content, cursor);
+
+            // Right-click toggles this one action's Enabled flag (FsmEditManager.SetActionEnabled)
+            // without neutering the whole state - see FsmEditManager.DisableState for that coarser,
+            // whole-state path. Drag-anywhere-on-the-block starts a reorder (FsmEditManager.MoveAction) -
+            // see BeginActionDrag/DragAction/EndActionDrag. capturedActionIndex/liveAction are fresh
+            // locals per loop iteration (actionIndex itself is a single reused `for`-loop variable), so
+            // the closures below always refer to this action, not whichever one the loop lands on last.
+            string capturedStateName = state.Name;
+            int capturedActionIndex = actionIndex;
+            string capturedExpectedActionTypeName = action.ActionType.Name;
+            FsmStateAction liveAction = action.Action;
+            block.Disabled = !liveAction.Enabled;
+            block.OnRightClicked += () =>
+                _editManager.SetActionEnabled(fsmKey, capturedStateName, capturedActionIndex, capturedExpectedActionTypeName, !liveAction.Enabled);
+            _valueRefreshers.Add(() => block.Disabled = !liveAction.Enabled);
+            block.AddEventTrigger(EventTriggerType.BeginDrag, e => BeginActionDrag(fsmKey, capturedStateName, capturedActionIndex, e));
+            block.AddEventTrigger(EventTriggerType.Drag, DragAction);
+            block.AddEventTrigger(EventTriggerType.EndDrag, EndActionDrag);
 
             AddActionHeaderRow(content, cursor, fsmKey, state, actionIndex, randomActionRank, action);
 
@@ -578,6 +623,15 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
 
             EndBlock(block, cursor);
             _actionBlocks[actionIndex] = block;
+
+            var groupWidgets = new List<(CanvasNode, Vector2)>();
+            for (int i = groupStart; i < content.Elements.Count; i++)
+            {
+                CanvasNode node = content.Elements[i];
+                groupWidgets.Add((node, node.LocalPosition));
+            }
+
+            _actionRowWidgets[actionIndex] = groupWidgets;
         }
     }
 
@@ -587,6 +641,11 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
         string fieldName = field.FieldName;
         string label = field.IsHidden ? $"{fieldName} (hidden)" : fieldName;
         Color? labelColor = field.IsHidden ? _ui.HiddenFieldLabelColor : null;
+
+        // Re-read every frame, not captured once - lets a right-click toggle on this action
+        // (FsmEditManager.SetActionEnabled) grey this field's whole row live without a full
+        // RebuildContent, same as block.Disabled in BuildActionsRows.
+        bool IsActionDisabled() => !action.Action.Enabled;
 
         // PlayMaker action fields expose an array as Fsm<Type>[] (FsmFloat[], FsmEvent[], ...), never a
         // raw primitive array or an Array-typed FsmVariable - each element is its own NamedVariable, so
@@ -610,11 +669,11 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
                 {
                     _tracker.TrackActionField(fsmKey, stateName, actionIndex, fieldName);
                 }
-            });
+            }, IsActionDisabled);
 
         if (!FsmEditManager.TryFormatValue(field.FieldValue, out string formatted))
         {
-            AddReadOnlyRow(content, cursor, label, () => FormatActionField(action.Action, field.Field.GetValue(action.Action)), _ui.ReadOnlyColor, dotIndent, labelColor);
+            AddReadOnlyRow(content, cursor, label, () => FormatActionField(action.Action, field.Field.GetValue(action.Action)), _ui.ReadOnlyColor, dotIndent, labelColor, IsActionDisabled);
             return;
         }
 
@@ -633,7 +692,7 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
                 {
                     _logger.LogWarning($"[FsmMaster] Failed to set action field '{stateName}'[{actionIndex}].{fieldName}: {e.Message}");
                 }
-            }, labelColor);
+            }, labelColor, IsActionDisabled);
             return;
         }
 
@@ -650,7 +709,7 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
             }
 
             return ReadCurrentFieldText();
-        }, labelColor);
+        }, labelColor, IsActionDisabled);
     }
 
     private void AddActionFieldArrayRows(CanvasPanel content, RowCursor cursor, string fsmKey, string stateName, int actionIndex, FsmActionInfo action, FsmActionFieldInfo field, Array array)
@@ -660,7 +719,10 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
         string arrayLabel = field.IsHidden ? $"{fieldName} (hidden)" : fieldName;
         Color? labelColor = field.IsHidden ? _ui.HiddenFieldLabelColor : null;
 
-        AddLabelOnlyRow(content, cursor, array.Length > 0 ? $"{arrayLabel} [{array.Length}]" : $"{arrayLabel} (empty)", labelColor ?? _ui.TextColor, FieldIndent);
+        // See AddActionFieldRow's own comment on why this is re-read every frame rather than captured.
+        bool IsActionDisabled() => !action.Action.Enabled;
+
+        AddLabelOnlyRow(content, cursor, array.Length > 0 ? $"{arrayLabel} [{array.Length}]" : $"{arrayLabel} (empty)", labelColor ?? _ui.TextColor, FieldIndent, IsActionDisabled);
 
         for (int elementIndex = 0; elementIndex < array.Length; elementIndex++)
         {
@@ -688,11 +750,11 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
                     {
                         _tracker.TrackActionFieldArrayElement(fsmKey, stateName, actionIndex, fieldName, capturedIndex);
                     }
-                });
+                }, IsActionDisabled);
 
             if (!FsmEditManager.TryFormatValue(element, out string formatted))
             {
-                AddReadOnlyRow(content, cursor, elementLabel, () => FormatActionField(action.Action, ReadCurrentElement(capturedIndex)), _ui.ReadOnlyColor, dotIndent, labelColor);
+                AddReadOnlyRow(content, cursor, elementLabel, () => FormatActionField(action.Action, ReadCurrentElement(capturedIndex)), _ui.ReadOnlyColor, dotIndent, labelColor, IsActionDisabled);
                 continue;
             }
 
@@ -708,7 +770,7 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
                     {
                         _logger.LogWarning($"[FsmMaster] Failed to set action field '{stateName}'[{actionIndex}].{fieldName}[{capturedIndex}]: {e.Message}");
                     }
-                }, labelColor);
+                }, labelColor, IsActionDisabled);
                 continue;
             }
 
@@ -728,7 +790,7 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
                 }
 
                 return ReadCurrentElementText();
-            }, labelColor);
+            }, labelColor, IsActionDisabled);
         }
 
         AddArraySeparatorRow(content, cursor, FieldIndent);
@@ -1513,6 +1575,179 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
         return rows.Count;
     }
 
+    // ---- Actions tab reorder-drag ----
+    // Continuous "others slide to fill" reorder (see the field-group comment on _actionDragHeights) -
+    // deliberately different from the Sequencer tab's own drop-to-index gesture above, which only ever
+    // shows a floating ghost label and resolves the target on release. Here every sibling block's own
+    // LocalPosition is recomputed and reassigned on every Drag frame, so the reorder previews live; only
+    // FsmEditManager.MoveAction is deferred to the drop.
+
+    private void BeginActionDrag(string fsmKey, string stateName, int actionIndex, PointerEventData e)
+    {
+        if (!_actionBlocks.TryGetValue(actionIndex, out CanvasSectionBlock? draggedBlock))
+        {
+            return;
+        }
+
+        _actionDragFsmKey = fsmKey;
+        _actionDragStateName = stateName;
+        _actionDragSourceIndex = actionIndex;
+        _actionDragPreviewIndex = actionIndex;
+
+        _actionDragHeights.Clear();
+        for (int i = 0; i < _actionBlocks.Count; i++)
+        {
+            _actionDragHeights.Add(_actionBlocks[i].Size.y);
+        }
+
+        _actionDragGrabOffsetY = ScreenToContentY(e.position) - draggedBlock.LocalPosition.y;
+
+        // Solid, opaque background for the duration of the drag (see SectionBlockDraggingColor) - reset
+        // implicitly once EndActionDrag's unconditional RebuildContent destroys and recreates every
+        // block from scratch, so there's no matching "set it back to false" anywhere.
+        draggedBlock.Dragging = true;
+    }
+
+    private void DragAction(PointerEventData e)
+    {
+        if (_actionDragSourceIndex < 0)
+        {
+            return;
+        }
+
+        float draggedTopY = ScreenToContentY(e.position) - _actionDragGrabOffsetY;
+        float draggedHeight = _actionDragHeights[_actionDragSourceIndex];
+
+        _actionDragPreviewIndex = ComputeActionDropIndex(draggedTopY + draggedHeight / 2f);
+        ReflowActionBlocksForDrag(draggedTopY);
+
+        _scrollView.ScrollToShow(draggedTopY, draggedHeight);
+    }
+
+    private void EndActionDrag(PointerEventData e)
+    {
+        string? fsmKey = _actionDragFsmKey;
+        string? stateName = _actionDragStateName;
+        int sourceIndex = _actionDragSourceIndex;
+        int targetIndex = _actionDragPreviewIndex;
+
+        _actionDragFsmKey = null;
+        _actionDragStateName = null;
+        _actionDragSourceIndex = -1;
+        _actionDragPreviewIndex = -1;
+        _actionDragHeights.Clear();
+
+        if (fsmKey == null || stateName == null || sourceIndex < 0)
+        {
+            return;
+        }
+
+        if (targetIndex != sourceIndex)
+        {
+            _editManager.MoveAction(fsmKey, stateName, sourceIndex, targetIndex);
+        }
+
+        // Unconditional, even on a same-index drop - RebuildContent is what undoes DragAction's own live
+        // reposition of every block back to its real, laid-out-from-scratch position.
+        RebuildContent(_cachedFsm, _cachedStateName);
+    }
+
+    // Content-space Y (same coordinate system as every block's own LocalPosition.y) for a drag pointer
+    // position - converts through _scrollView.Content's own resolved screen Position rather than
+    // tracking the current scroll offset by hand, the same technique ComputeDropIndex above uses via
+    // each row widget's own Position.
+    private float ScreenToContentY(Vector2 screenPoint)
+    {
+        float topLeftY = Screen.height - screenPoint.y;
+        return topLeftY - (_scrollView.Content?.Position.y ?? 0f);
+    }
+
+    // Where the dragged block's center currently falls among every OTHER block, stacked tightly in their
+    // own original relative order (i.e. as if the dragged one had already been removed) - the same
+    // "compare against each candidate slot's own midpoint" approach ComputeDropIndex uses, just computed
+    // against _actionDragHeights instead of reading built widgets directly, since the widgets in
+    // question are themselves being repositioned live by ReflowActionBlocksForDrag every frame. Returns
+    // an index into the N-1 "other" actions (0..othersCount inclusive) - exactly the second argument
+    // MoveAction expects once the source is removed from consideration.
+    private int ComputeActionDropIndex(float draggedCenterY)
+    {
+        float y = 0f;
+        int previewIndex = 0;
+        for (int i = 0; i < _actionDragHeights.Count; i++)
+        {
+            if (i == _actionDragSourceIndex)
+            {
+                continue;
+            }
+
+            float height = _actionDragHeights[i];
+            if (draggedCenterY < y + height / 2f)
+            {
+                return previewIndex;
+            }
+
+            y += height + BlockGap;
+            previewIndex++;
+        }
+
+        return previewIndex;
+    }
+
+    // Repositions every action's whole widget group (block + header + fields - see _actionRowWidgets) for
+    // the current drag frame: every other action packs tightly in its own original relative order, with a
+    // dragged-block-sized gap left open at _actionDragPreviewIndex so siblings visibly slide out of the
+    // way as the drag passes them, while the dragged action's own widgets just follow the pointer
+    // directly at draggedTopY rather than snapping into that gap - matching typical drag-list reorder
+    // behavior, where the floating item and the gap it's about to drop into are shown separately until
+    // release.
+    private void ReflowActionBlocksForDrag(float draggedTopY)
+    {
+        float draggedHeight = _actionDragHeights[_actionDragSourceIndex];
+        int insertAt = Mathf.Clamp(_actionDragPreviewIndex, 0, _actionDragHeights.Count - 1);
+
+        float y = 0f;
+        int posAmongOthers = 0;
+        for (int i = 0; i < _actionDragHeights.Count; i++)
+        {
+            if (i == _actionDragSourceIndex)
+            {
+                continue;
+            }
+
+            if (posAmongOthers == insertAt)
+            {
+                y += draggedHeight + BlockGap;
+            }
+
+            MoveActionGroup(i, y);
+
+            y += _actionDragHeights[i] + BlockGap;
+            posAmongOthers++;
+        }
+
+        MoveActionGroup(_actionDragSourceIndex, draggedTopY);
+    }
+
+    // Moves every widget belonging to actionIndex (its block plus every header/field/dot/button row -
+    // see _actionRowWidgets) so its block's own rest position lands at targetBlockY, applying that same
+    // delta to every other widget in the group instead of the block alone - they're siblings under the
+    // same content panel, not children of the block, so only moving the block would leave its header
+    // text and field rows visually behind. _actionRowWidgets[actionIndex][0] is always the block itself
+    // (BuildActionsRows snapshots the group starting right before BeginBlock adds it).
+    private void MoveActionGroup(int actionIndex, float targetBlockY)
+    {
+        if (!_actionRowWidgets.TryGetValue(actionIndex, out List<(CanvasNode Node, Vector2 RestPosition)>? widgets) || widgets.Count == 0)
+        {
+            return;
+        }
+
+        float delta = targetBlockY - widgets[0].RestPosition.y;
+        foreach ((CanvasNode node, Vector2 restPosition) in widgets)
+        {
+            node.LocalPosition = new Vector2(restPosition.x, restPosition.y + delta);
+        }
+    }
+
     // ---------------- Shared editable-value helpers ----------------
 
     private static bool IsBoolLike(object? value) =>
@@ -1527,7 +1762,9 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
 
     // Numeric vs. string value color-coding - vector/rect/quaternion/color-typed variables fall
     // through to the numeric color, since they're ultimately just a comma-joined list of floats
-    // (see FsmEditManager.FormatFloats).
+    // (see FsmEditManager.FormatFloats). A right-click-disabled action's own fields override this to
+    // ActionDisabledTextColor at the call site (AddTextFieldRow/AddReadOnlyRow's isDisabled param),
+    // not here - this always reports the normal, enabled-looking color.
     private Color ValueColorFor(object? value)
     {
         object? unwrapped = value is NamedVariable nv ? nv.RawValue : value;
@@ -1576,31 +1813,51 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
     // need a dot (Events tab, section headers), so a shared signature change would ripple there for no
     // reason. isOn/onClicked are re-read from the tracker rather than captured once, so the dot always
     // reflects the tracker's current state even if the same variable/field gets tracked from elsewhere.
-    private float AddToggleDot(CanvasPanel content, RowCursor cursor, float indent, Func<bool> isOn, Action onClicked)
+    // isDisabled, when given (only ever by an action field row - see AddActionFieldRow/
+    // AddActionFieldArrayRows' IsActionDisabled), greys this dot out via CanvasToggleDot.Tint while that
+    // action is right-click-disabled, re-read every frame so it stays in sync without a full rebuild.
+    private float AddToggleDot(CanvasPanel content, RowCursor cursor, float indent, Func<bool> isOn, Action onClicked, Func<bool>? isDisabled = null)
     {
         CanvasToggleDot dot = content.Add(new CanvasToggleDot($"Row{cursor.Count++}", _ui));
         dot.LocalPosition = new Vector2(indent, cursor.Y + (RowHeight - DotWidth) / 2f);
         dot.Size = new Vector2(DotWidth, DotWidth);
         dot.On = isOn();
+        if (isDisabled != null)
+        {
+            dot.Tint = isDisabled() ? _ui.ActionDisabledTextColor : _ui.AccentColor;
+        }
+
         dot.Build();
         dot.OnClicked += onClicked;
 
         _valueRefreshers.Add(() => dot.On = isOn());
+        if (isDisabled != null)
+        {
+            _valueRefreshers.Add(() => dot.Tint = isDisabled() ? _ui.ActionDisabledTextColor : _ui.AccentColor);
+        }
 
         return indent + DotWidth + DotGap;
     }
 
-    private void AddSectionHeaderRow(CanvasPanel content, RowCursor cursor, string title, float indent)
+    // colorProvider, when given, is re-read every frame via _valueRefreshers instead of just once at
+    // build time - used by AddActionHeaderRow so a right-click-disabled action's header greys out
+    // without needing a full RebuildContent (see BuildActionsRows).
+    private void AddSectionHeaderRow(CanvasPanel content, RowCursor cursor, string title, float indent, Func<Color>? colorProvider = null)
     {
         CanvasText header = content.Add(new CanvasText($"Row{cursor.Count++}", _ui));
         header.Text = title;
         header.Font = _ui.HeaderFont;
         header.FontStyle = FontStyle.Bold;
-        header.Color = _ui.TypeBadgeColor;
+        header.Color = colorProvider != null ? colorProvider() : _ui.TypeBadgeColor;
         header.Overflow = HorizontalWrapMode.Overflow;
         header.LocalPosition = new Vector2(indent, cursor.Y);
         header.Size = new Vector2(Mathf.Max(0f, _scrollView.Size.x - indent - BlockRightGap), HeaderRowHeight);
         header.Build();
+
+        if (colorProvider != null)
+        {
+            _valueRefreshers.Add(() => header.Color = colorProvider());
+        }
 
         cursor.Y += HeaderRowHeight;
     }
@@ -1614,11 +1871,22 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
     // Sequencer tab (including closing the block there) without this row ever needing a rebuild
     // callback. randomActionRank is only meaningful (and only read) when the action is itself a
     // Random-event-family one - see BuildActionsRows.
+    // A disabled action's header text turns dark red (and its Sequencer button label greys) along with
+    // its block's background (see BuildActionsRows' block.Disabled wiring) - all driven off the same
+    // live Enabled read so they can never fall out of sync, and all refreshed per-frame via
+    // _valueRefreshers rather than needing a full RebuildContent on every right-click toggle.
     private void AddActionHeaderRow(CanvasPanel content, RowCursor cursor, string fsmKey, FsmStateInfo state, int actionIndex, int randomActionRank, FsmActionInfo action)
     {
-        if (!action.ActionType.Name.Contains("Random"))
+        string stateName = state.Name;
+        bool isRandom = action.ActionType.Name.Contains("Random");
+
+        // Only a disabled action's own header/Sequencer-button text turns red/grey - an enabled action
+        // keeps TypeBadgeColor's normal teal, exactly as every other section header does.
+        Color HeaderColor() => action.Action.Enabled ? _ui.TypeBadgeColor : _ui.ActionNameColor;
+
+        if (!isRandom)
         {
-            AddSectionHeaderRow(content, cursor, action.ActionType.Name, RowIndent);
+            AddSectionHeaderRow(content, cursor, action.ActionType.Name, RowIndent, HeaderColor);
             return;
         }
 
@@ -1630,23 +1898,48 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
         header.Text = action.ActionType.Name;
         header.Font = _ui.HeaderFont;
         header.FontStyle = FontStyle.Bold;
-        header.Color = _ui.TypeBadgeColor;
+        header.Color = HeaderColor();
         header.Overflow = HorizontalWrapMode.Overflow;
         header.LocalPosition = new Vector2(RowIndent, cursor.Y);
         header.Size = new Vector2(headerWidth, HeaderRowHeight);
         header.Build();
+        _valueRefreshers.Add(() => header.Color = HeaderColor());
 
         CanvasButton sequencerButton = content.Add(new CanvasButton($"Row{cursor.Count++}", _ui));
         sequencerButton.Text.Text = "Sequencer";
         sequencerButton.LocalPosition = new Vector2(RowIndent + headerWidth + gap, cursor.Y);
         sequencerButton.Size = new Vector2(SequencerButtonWidth, HeaderRowHeight);
-        sequencerButton.Toggled = IsSequencerOpen(fsmKey, state.Name, randomActionRank);
+        if (!action.Action.Enabled)
+        {
+            // NormalTint/ToggledTint set before Toggled below, so CanvasButton.Toggled's own setter
+            // (which swaps Tint between them on assignment) picks the disabled pair immediately rather
+            // than briefly showing the normal blue ButtonNormal/ButtonActive on first build.
+            sequencerButton.NormalTint = _ui.ActionDisabledSequencerOffColor;
+            sequencerButton.ToggledTint = _ui.ActionDisabledSequencerOnColor;
+            sequencerButton.Text.Color = _ui.ActionDisabledTextColor;
+        }
+
+        sequencerButton.Toggled = IsSequencerOpen(fsmKey, stateName, randomActionRank);
         sequencerButton.Build();
 
-        string stateName = state.Name;
         sequencerButton.OnClicked += () => OpenSequencerBlock(fsmKey, stateName, randomActionRank);
 
-        _valueRefreshers.Add(() => sequencerButton.Toggled = IsSequencerOpen(fsmKey, stateName, randomActionRank));
+        _valueRefreshers.Add(() =>
+        {
+            bool disabled = !action.Action.Enabled;
+            bool open = IsSequencerOpen(fsmKey, stateName, randomActionRank);
+
+            sequencerButton.Toggled = open;
+            sequencerButton.NormalTint = disabled ? _ui.ActionDisabledSequencerOffColor : _ui.ButtonNormal;
+            sequencerButton.ToggledTint = disabled ? _ui.ActionDisabledSequencerOnColor : _ui.ButtonActive;
+
+            // Set directly rather than relying on the Toggled assignment above - CanvasButton.Toggled's
+            // setter only swaps Tint when the toggled bool itself changes since last frame, so a
+            // same-frame enable/disable toggle with no open/close change would otherwise leave the old
+            // tint pair showing until the sequencer block's own open state next flips.
+            sequencerButton.Tint = disabled ? (open ? _ui.ActionDisabledSequencerOnColor : _ui.ActionDisabledSequencerOffColor) : (open ? _ui.ButtonActive : _ui.ButtonNormal);
+            sequencerButton.Text.Color = disabled ? _ui.ActionDisabledTextColor : _ui.TextColor;
+        });
 
         cursor.Y += HeaderRowHeight;
     }
@@ -1760,29 +2053,41 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
         cursor.Y += ArraySeparatorHeight + ArraySeparatorGap;
     }
 
-    private void AddLabelOnlyRow(CanvasPanel content, RowCursor cursor, string label, Color color, float indent)
+    // isDisabled, when given, is re-read every frame via _valueRefreshers (see AddActionFieldRow/
+    // AddActionFieldArrayRows' own IsActionDisabled) so a right-click toggle greys this label live
+    // without a full RebuildContent - null for every non-action caller (Events tab, Variables tab's
+    // array-variable label), which always keeps color as given.
+    private void AddLabelOnlyRow(CanvasPanel content, RowCursor cursor, string label, Color color, float indent, Func<bool>? isDisabled = null)
     {
         CanvasText row = content.Add(new CanvasText($"Row{cursor.Count++}", _ui));
         row.Text = label;
-        row.Color = color;
+        row.Color = isDisabled != null && isDisabled() ? _ui.ActionDisabledTextColor : color;
         row.Overflow = HorizontalWrapMode.Overflow;
         row.LocalPosition = new Vector2(indent, cursor.Y);
         row.Size = new Vector2(Mathf.Max(0f, _scrollView.Size.x - indent - BlockRightGap), RowHeight);
         row.Build();
+
+        if (isDisabled != null)
+        {
+            _valueRefreshers.Add(() => row.Color = isDisabled() ? _ui.ActionDisabledTextColor : color);
+        }
 
         cursor.Y += RowHeight;
     }
 
     // readValue is re-invoked every frame (see _valueRefreshers) rather than the row capturing a
     // one-time string, so an external mutation (Load, Reset, the FSM's own running code) is reflected
-    // without the user needing to switch tabs/state to force a rebuild.
-    private void AddReadOnlyRow(CanvasPanel content, RowCursor cursor, string label, Func<string> readValue, Color valueColor, float indent, Color? labelColor = null)
+    // without the user needing to switch tabs/state to force a rebuild. isDisabled (only ever passed by
+    // an action field row - see AddActionFieldRow/AddActionFieldArrayRows' IsActionDisabled) overrides
+    // both colors to ActionDisabledTextColor while that action is right-click-disabled, also re-read
+    // every frame so it stays in sync without a full rebuild.
+    private void AddReadOnlyRow(CanvasPanel content, RowCursor cursor, string label, Func<string> readValue, Color valueColor, float indent, Color? labelColor = null, Func<bool>? isDisabled = null)
     {
         (float labelWidth, float valueX, float valueWidth) = ComputeColumns(indent);
 
         CanvasText labelText = content.Add(new CanvasText($"Row{cursor.Count++}", _ui));
         labelText.Text = label;
-        labelText.Color = labelColor ?? _ui.TextColor;
+        labelText.Color = isDisabled != null && isDisabled() ? _ui.ActionDisabledTextColor : (labelColor ?? _ui.TextColor);
         labelText.Overflow = HorizontalWrapMode.Overflow;
         labelText.LocalPosition = new Vector2(indent, cursor.Y);
         labelText.Size = new Vector2(labelWidth, RowHeight);
@@ -1790,25 +2095,35 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
 
         CanvasText valueText = content.Add(new CanvasText($"Row{cursor.Count++}", _ui));
         valueText.Text = readValue();
-        valueText.Color = valueColor;
+        valueText.Color = isDisabled != null && isDisabled() ? _ui.ActionDisabledTextColor : valueColor;
         valueText.Overflow = HorizontalWrapMode.Overflow;
         valueText.LocalPosition = new Vector2(valueX, cursor.Y);
         valueText.Size = new Vector2(valueWidth, RowHeight);
         valueText.Build();
 
         _valueRefreshers.Add(() => valueText.Text = readValue());
+        if (isDisabled != null)
+        {
+            _valueRefreshers.Add(() =>
+            {
+                bool disabled = isDisabled();
+                labelText.Color = disabled ? _ui.ActionDisabledTextColor : (labelColor ?? _ui.TextColor);
+                valueText.Color = disabled ? _ui.ActionDisabledTextColor : valueColor;
+            });
+        }
 
         cursor.Y += RowHeight;
     }
 
     // readCurrent is re-invoked every frame (see _valueRefreshers), same reasoning as AddReadOnlyRow.
-    private void AddBoolRow(CanvasPanel content, RowCursor cursor, string label, Func<bool> readCurrent, float indent, Action<bool> onToggle, Color? labelColor = null)
+    // isDisabled: see AddReadOnlyRow's own comment - also greys the toggle button's background/text.
+    private void AddBoolRow(CanvasPanel content, RowCursor cursor, string label, Func<bool> readCurrent, float indent, Action<bool> onToggle, Color? labelColor = null, Func<bool>? isDisabled = null)
     {
         (float labelWidth, float valueX, float valueWidth) = ComputeColumns(indent);
 
         CanvasText labelText = content.Add(new CanvasText($"Row{cursor.Count++}", _ui));
         labelText.Text = label;
-        labelText.Color = labelColor ?? _ui.TextColor;
+        labelText.Color = isDisabled != null && isDisabled() ? _ui.ActionDisabledTextColor : (labelColor ?? _ui.TextColor);
         labelText.Overflow = HorizontalWrapMode.Overflow;
         labelText.LocalPosition = new Vector2(indent, cursor.Y);
         labelText.Size = new Vector2(labelWidth, RowHeight);
@@ -1819,6 +2134,14 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
         toggle.Text.Text = toggle.Toggled.ToString();
         toggle.LocalPosition = new Vector2(valueX, cursor.Y);
         toggle.Size = new Vector2(valueWidth, RowHeight);
+        if (isDisabled != null && isDisabled())
+        {
+            toggle.NormalTint = _ui.ActionDisabledFieldBackgroundColor;
+            toggle.ToggledTint = _ui.ActionDisabledFieldBackgroundColor;
+            toggle.Tint = _ui.ActionDisabledFieldBackgroundColor;
+            toggle.Text.Color = _ui.ActionDisabledTextColor;
+        }
+
         toggle.Build();
         toggle.OnClicked += () =>
         {
@@ -1833,6 +2156,16 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
             bool current = readCurrent();
             toggle.Toggled = current;
             toggle.Text.Text = current.ToString();
+
+            if (isDisabled != null)
+            {
+                bool disabled = isDisabled();
+                labelText.Color = disabled ? _ui.ActionDisabledTextColor : (labelColor ?? _ui.TextColor);
+                toggle.NormalTint = disabled ? _ui.ActionDisabledFieldBackgroundColor : _ui.ButtonNormal;
+                toggle.ToggledTint = disabled ? _ui.ActionDisabledFieldBackgroundColor : _ui.ButtonActive;
+                toggle.Tint = disabled ? _ui.ActionDisabledFieldBackgroundColor : (toggle.Toggled ? _ui.ButtonActive : _ui.ButtonNormal);
+                toggle.Text.Color = disabled ? _ui.ActionDisabledTextColor : _ui.TextColor;
+            }
         });
 
         cursor.Y += RowHeight;
@@ -1844,14 +2177,15 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
     // and returns without throwing) redisplay correctly too, not just a thrown parse exception.
     // readCurrent is the same re-read, invoked again every frame thereafter (see _valueRefreshers) via
     // UpdateDefaultText, which itself no-ops while the field is focused - so continuous refresh never
-    // fights with the user actively typing into this exact field.
-    private void AddTextFieldRow(CanvasPanel content, RowCursor cursor, string label, Func<string> readCurrent, Color valueColor, float indent, Func<string, string> onSubmit, Color? labelColor = null)
+    // fights with the user actively typing into this exact field. isDisabled: see AddReadOnlyRow's own
+    // comment - also greys the input box's background to look more deselected/inert.
+    private void AddTextFieldRow(CanvasPanel content, RowCursor cursor, string label, Func<string> readCurrent, Color valueColor, float indent, Func<string, string> onSubmit, Color? labelColor = null, Func<bool>? isDisabled = null)
     {
         (float labelWidth, float valueX, float valueWidth) = ComputeColumns(indent);
 
         CanvasText labelText = content.Add(new CanvasText($"Row{cursor.Count++}", _ui));
         labelText.Text = label;
-        labelText.Color = labelColor ?? _ui.TextColor;
+        labelText.Color = isDisabled != null && isDisabled() ? _ui.ActionDisabledTextColor : (labelColor ?? _ui.TextColor);
         labelText.Overflow = HorizontalWrapMode.Overflow;
         labelText.LocalPosition = new Vector2(indent, cursor.Y);
         labelText.Size = new Vector2(labelWidth, RowHeight);
@@ -1862,7 +2196,8 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
         // toggle rows this same affordance for free). Added as a sibling BEFORE valueField (not a
         // child of it - CanvasImage isn't a CanvasPanel and can't parent arbitrary children), so it
         // renders behind the text field it's paired with.
-        CanvasImage background = content.Add(new CanvasImage($"Row{cursor.Count++}", _ui) { Tint = _ui.ButtonNormal });
+        bool startsDisabled = isDisabled != null && isDisabled();
+        CanvasImage background = content.Add(new CanvasImage($"Row{cursor.Count++}", _ui) { Tint = startsDisabled ? _ui.ActionDisabledFieldBackgroundColor : _ui.ButtonNormal });
         background.LocalPosition = new Vector2(valueX, cursor.Y);
         background.Size = new Vector2(valueWidth, RowHeight);
         background.AddBorder(_ui.PanelBorder);
@@ -1870,7 +2205,7 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
 
         CanvasTextField valueField = content.Add(new CanvasTextField($"Row{cursor.Count++}", _ui));
         valueField.Text = readCurrent();
-        valueField.Color = valueColor;
+        valueField.Color = startsDisabled ? _ui.ActionDisabledTextColor : valueColor;
         valueField.Overflow = HorizontalWrapMode.Overflow;
         valueField.LocalPosition = new Vector2(valueX + 3f, cursor.Y);
         valueField.Size = new Vector2(Mathf.Max(0f, valueWidth - 6f), RowHeight);
@@ -1883,6 +2218,16 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
         };
 
         _valueRefreshers.Add(() => valueField.UpdateDefaultText(readCurrent()));
+        if (isDisabled != null)
+        {
+            _valueRefreshers.Add(() =>
+            {
+                bool disabled = isDisabled();
+                labelText.Color = disabled ? _ui.ActionDisabledTextColor : (labelColor ?? _ui.TextColor);
+                background.Tint = disabled ? _ui.ActionDisabledFieldBackgroundColor : _ui.ButtonNormal;
+                valueField.Color = disabled ? _ui.ActionDisabledTextColor : valueColor;
+            });
+        }
 
         cursor.Y += RowHeight;
     }

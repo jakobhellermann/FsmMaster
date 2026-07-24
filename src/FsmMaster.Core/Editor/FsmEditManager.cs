@@ -239,12 +239,23 @@ internal sealed class FsmEditManager
         // GetOrCreateActiveEditSet(fsmKey) further down mutates, whether or not it's the same object.
         var variableOverrides = editSet.VariableOverrides.ToArray();
         var actionFieldOverrides = editSet.ActionFieldOverrides.ToArray();
+        var actionEnabledOverrides = editSet.ActionEnabledOverrides.ToArray();
+        var actionReorders = editSet.ActionReorders.ToArray();
         var disabledStates = editSet.DisabledStates.ToArray();
         var transitionRetargets = editSet.TransitionRetargets.ToArray();
         var sequencerOverrides = editSet.SequencerOverrides.ToArray();
 
         foreach (Fsm fsm in instances)
         {
+            // Applied before every other per-action override below - those address an action by its
+            // *current* ActionIndex (kept in sync with any reorder via RemapActionIndicesForSwap at edit
+            // time), so the action array needs to already be in its final order before field/enabled
+            // overrides or sequencer installs resolve their own indices against it.
+            foreach (ActionReorder ov in actionReorders)
+            {
+                ApplyActionReorder(editSet.FsmKey, fsm, ov);
+            }
+
             foreach (VariableOverride ov in variableOverrides)
             {
                 ApplyVariableOverride(editSet.FsmKey, fsm, ov);
@@ -253,6 +264,11 @@ internal sealed class FsmEditManager
             foreach (ActionFieldOverride ov in actionFieldOverrides)
             {
                 ApplyActionFieldOverride(editSet.FsmKey, fsm, ov);
+            }
+
+            foreach (ActionEnabledOverride ov in actionEnabledOverrides)
+            {
+                ApplyActionEnabledOverride(editSet.FsmKey, fsm, ov);
             }
 
             foreach (string stateName in disabledStates)
@@ -272,8 +288,9 @@ internal sealed class FsmEditManager
         }
 
         _logger.LogInfo($"[FsmMaster] Applied edit set for fsm key '{editSet.FsmKey}' to {instances.Count} live instance(s): "
-            + $"{variableOverrides.Length} variable, {actionFieldOverrides.Length} action-field, {disabledStates.Length} disabled-state, "
-            + $"{transitionRetargets.Length} transition, {sequencerOverrides.Length} sequencer override(s).");
+            + $"{variableOverrides.Length} variable, {actionFieldOverrides.Length} action-field, {actionEnabledOverrides.Length} action-enabled, "
+            + $"{actionReorders.Length} action-reorder, {disabledStates.Length} disabled-state, {transitionRetargets.Length} transition, "
+            + $"{sequencerOverrides.Length} sequencer override(s).");
     }
 
     // Restores every live instance of fsmKey to its pristine snapshot and drops all edit/undo bookkeeping
@@ -396,6 +413,111 @@ internal sealed class FsmEditManager
         }
     }
 
+    // Same shape as SetActionField, for the action's own Enabled flag rather than one of its reflected
+    // fields - the graph overlay/Actions-tab entry point for "toggle this action on/off" without
+    // disabling the whole state (see DisableState for the coarser, whole-state neutering path).
+    public void SetActionEnabled(string fsmKey, string stateName, int actionIndex, string expectedActionTypeName, bool enabled)
+    {
+        bool? previousValue = GetCurrentActionEnabledValue(fsmKey, stateName, actionIndex, expectedActionTypeName);
+
+        var ov = new ActionEnabledOverride
+        {
+            StateName = stateName,
+            ActionIndex = actionIndex,
+            ExpectedActionTypeName = expectedActionTypeName,
+            Enabled = enabled,
+        };
+        foreach (Fsm fsm in GetLiveInstances(fsmKey))
+        {
+            ApplyActionEnabledOverride(fsmKey, fsm, ov);
+        }
+
+        if (previousValue.HasValue)
+        {
+            bool previous = previousValue.Value;
+            PushUndo(fsmKey, () => SetActionEnabled(fsmKey, stateName, actionIndex, expectedActionTypeName, previous));
+        }
+    }
+
+    // KNOWN BROKEN - confirmed in-game to both fail to persist and crash the game on Save. Root cause
+    // (see ApplyActionReorder below for the mechanism): reassigning FsmState.Actions to a reordered array
+    // fights PlayMaker's own FsmState.activeActionIndex, a raw int the engine's ActivateActions/state
+    // runner uses to resume at Actions[activeActionIndex] across frames (decompiled source:
+    // .claude/agent-context/silksong/Playmaker/decompiled/HutongGames.PlayMaker/FsmState.cs). If the
+    // state being reordered is currently active, that index now resolves to a DIFFERENT action than the
+    // one actually running the moment this runs, desyncing execution - which is consistent with both
+    // symptoms seen: actions silently reverting to original order (something re-reads Actions[i] against
+    // stale expectations) and an outright crash under Save specifically. FsmSaveDataStore's wire format
+    // (FsmEditSetWire/ToWire/FromWire) was also never updated for ActionReorder (ActionEnabledOverride's
+    // own wire gap has since been closed - see FsmEditModels.ActionEnabledOverride), so even setting the
+    // crash aside, a reorder still doesn't round-trip through Save/Load today.
+    //
+    // Recommended fix for a future pass, per feature_todo.md's "Rearrange actions" entry: don't reassign
+    // FsmState.Actions' order at all. Instead, follow this codebase's own existing pattern for
+    // engine-safe action-list surgery - DisableState installs a synthetic SendExitEventAction
+    // (PlayMakerFsmOps.AddAction) and InstallSequencer installs a synthetic SequenceSendEventAction
+    // (PlayMakerFsmOps.InsertActionAfter) rather than mutating any EXISTING action's position or identity.
+    // A reorder could do the same: install one custom FsmStateAction as a thin proxy/dispatcher that owns
+    // the desired execution order internally (forwarding OnEnter/OnUpdate/etc. to the real action objects
+    // in whatever sequence the user picked) while state.Actions itself keeps its original array order and
+    // indices untouched - sidestepping activeActionIndex entirely, and needing its own new wire format
+    // fields to actually persist.
+    //
+    // Moves the action currently at fromIndex to sit at toIndex within stateName, shifting every action
+    // in between by one - the Actions tab's drag-to-reorder gesture's commit step (FsmActiveStatePanel's
+    // own live drag preview never touches FsmEditManager until the drop). Unlike SetVariable/
+    // SetActionField/SetActionEnabled this has no meaningful "previous value" to read back; a list move
+    // is its own inverse when replayed with the two indices swapped, so undo just replays that. Requires
+    // at least one live instance to read the state's current action count from - the Actions tab that
+    // calls this only ever shows actions for an FSM that's currently live, so there's nothing meaningful
+    // to record for a key with none.
+    public void MoveAction(string fsmKey, string stateName, int fromIndex, int toIndex)
+    {
+        Fsm? sample = GetLiveInstances(fsmKey).FirstOrDefault();
+        FsmState? state = sample != null ? sample.GetState(stateName) : null;
+        if (state == null)
+        {
+            return;
+        }
+
+        int count = state.Actions.Length;
+        if (count == 0)
+        {
+            return;
+        }
+
+        fromIndex = Mathf.Clamp(fromIndex, 0, count - 1);
+        toIndex = Mathf.Clamp(toIndex, 0, count - 1);
+        if (fromIndex == toIndex)
+        {
+            return;
+        }
+
+        // Every other override addressing an action in this state by ActionIndex (field/enabled overrides,
+        // neutered-action bookkeeping) needs to move along with the action it targets - otherwise a later
+        // Reset/apply would silently land on whichever action now sits at that index instead of the one it
+        // was originally recorded against.
+        RemapActionIndicesForMove(fsmKey, stateName, fromIndex, toIndex);
+
+        FsmEditSet active = GetOrCreateActiveEditSet(fsmKey);
+        ActionReorder? existingReorder = active.ActionReorders.Find(r => r.StateName == stateName);
+        List<int> order = existingReorder != null
+            ? new List<int>(existingReorder.OriginalIndices)
+            : Enumerable.Range(0, count).ToList();
+
+        int moved = order[fromIndex];
+        order.RemoveAt(fromIndex);
+        order.Insert(toIndex, moved);
+
+        var ov = new ActionReorder { StateName = stateName, OriginalIndices = order };
+        foreach (Fsm fsm in GetLiveInstances(fsmKey))
+        {
+            ApplyActionReorder(fsmKey, fsm, ov);
+        }
+
+        PushUndo(fsmKey, () => MoveAction(fsmKey, stateName, toIndex, fromIndex));
+    }
+
     // Same shape as SetVariable, for one element of an Array-typed variable - see
     // ApplyVariableArrayElementOverride and SupportedArrayElementTypes for what's actually editable.
     public void SetVariableArrayElement(string fsmKey, string variableName, int arrayIndex, string elementStringValue)
@@ -507,6 +629,44 @@ internal sealed class FsmEditManager
         }
 
         return null;
+    }
+
+    private bool? GetCurrentActionEnabledValue(string fsmKey, string stateName, int actionIndex, string expectedActionTypeName)
+    {
+        foreach (Fsm fsm in GetLiveInstances(fsmKey))
+        {
+            if (TryFindAction(fsm, stateName, actionIndex, expectedActionTypeName, out FsmStateAction? action))
+            {
+                return action.Enabled;
+            }
+        }
+
+        return null;
+    }
+
+    // Looks up the action at (stateName, actionIndex), failing if the action's runtime type no longer
+    // matches expectedActionTypeName (the FSM was edited since the override was recorded) - the
+    // field-free half of TryFindActionField, for edits that target the action itself (Enabled) rather
+    // than one of its reflected fields.
+    private static bool TryFindAction(Fsm fsm, string stateName, int actionIndex, string expectedActionTypeName,
+        [NotNullWhen(true)] out FsmStateAction? action)
+    {
+        action = null;
+
+        FsmState? state = fsm.GetState(stateName);
+        if (state == null || actionIndex < 0 || actionIndex >= state.Actions.Length)
+        {
+            return false;
+        }
+
+        FsmStateAction candidate = state.Actions[actionIndex];
+        if (candidate.GetType().Name != expectedActionTypeName)
+        {
+            return false;
+        }
+
+        action = candidate;
+        return true;
     }
 
     // Looks up the action at (stateName, actionIndex) and the named field on it, failing if the action's
@@ -848,6 +1008,218 @@ internal sealed class FsmEditManager
         }
 
         TryAssignFieldValue(action, field, currentValue, ov.StringValue);
+    }
+
+    // Applies one Enabled-flag override to a single live Fsm instance - same pristine-capture/dedupe
+    // shape as ApplyActionFieldOverride, just against the action's own property instead of a reflected
+    // field (see ActionEnabledOverride for why this can't reuse ActionFieldOverride's field lookup).
+    public void ApplyActionEnabledOverride(string fsmKey, Fsm fsm, ActionEnabledOverride ov)
+    {
+        if (!TryFindAction(fsm, ov.StateName, ov.ActionIndex, ov.ExpectedActionTypeName, out FsmStateAction? action))
+        {
+            _logger.LogWarning($"[FsmMaster] Action at '{ov.StateName}'[{ov.ActionIndex}] on fsm '{fsm.Name}' is not '{ov.ExpectedActionTypeName}' or doesn't exist; skipping.");
+            return;
+        }
+
+        FsmPristineSnapshot snapshot = GetOrCreateSnapshot(fsmKey);
+        ActionEnabledOverride? pristineEntry = snapshot.OriginalValues.ActionEnabledOverrides.Find(a =>
+            a.StateName == ov.StateName && a.ActionIndex == ov.ActionIndex);
+        if (pristineEntry == null)
+        {
+            pristineEntry = new ActionEnabledOverride
+            {
+                StateName = ov.StateName,
+                ActionIndex = ov.ActionIndex,
+                ExpectedActionTypeName = ov.ExpectedActionTypeName,
+                Enabled = action.Enabled,
+            };
+            snapshot.OriginalValues.ActionEnabledOverrides.Add(pristineEntry);
+        }
+
+        action.Enabled = ov.Enabled;
+
+        // See ApplyVariableOverride's matching comment - drop the edit once dialed back to pristine
+        // rather than recording a no-op override.
+        FsmEditSet active = GetOrCreateActiveEditSet(fsmKey);
+        active.ActionEnabledOverrides.RemoveAll(a => a.StateName == ov.StateName && a.ActionIndex == ov.ActionIndex);
+        if (action.Enabled != pristineEntry.Enabled)
+        {
+            active.ActionEnabledOverrides.Add(ov);
+        }
+
+        PruneActiveEditSetIfEmpty(fsmKey);
+        BumpEditGeneration();
+    }
+
+    // Writes ov's recorded pristine Enabled value back onto the live action, undoing
+    // ApplyActionEnabledOverride. No-ops quietly if the state/action no longer matches.
+    private static void RestoreActionEnabled(Fsm fsm, ActionEnabledOverride ov)
+    {
+        if (TryFindAction(fsm, ov.StateName, ov.ActionIndex, ov.ExpectedActionTypeName, out FsmStateAction? action))
+        {
+            action.Enabled = ov.Enabled;
+        }
+    }
+
+    // KNOWN BROKEN - see MoveAction's own comment above for the full diagnosis and recommended fix. The
+    // `state.Actions = reordered;` line below is the actual unsafe operation: FsmState.activeActionIndex
+    // (HutongGames.PlayMaker, decompiled at .claude/agent-context/silksong/Playmaker/decompiled/
+    // HutongGames.PlayMaker/FsmState.cs) is a raw index into this same array that PlayMaker's own engine
+    // keeps across frames while a state is active - swapping the array out from under it is what causes
+    // both the observed revert-to-original-order behavior and the Save-time crash.
+    //
+    // Rebuilds a single live Fsm instance's action order from its captured original array according to
+    // ov.OriginalIndices - always a full rebuild against that instance's own pristine array, never a
+    // relative move against whatever order it's currently in, so re-applying the same ActionReorder twice
+    // (e.g. a saved edit set reapplied on scene reload) is idempotent rather than compounding.
+    public void ApplyActionReorder(string fsmKey, Fsm fsm, ActionReorder ov)
+    {
+        FsmState? state = fsm.GetState(ov.StateName);
+        if (state == null)
+        {
+            _logger.LogWarning($"[FsmMaster] State '{ov.StateName}' not found on fsm '{fsm.Name}'; skipping action reorder.");
+            return;
+        }
+
+        FsmStateAction[] original = GetOrCaptureOriginalActionOrder(fsmKey, fsm, ov.StateName, state);
+        if (ov.OriginalIndices.Count != original.Length)
+        {
+            _logger.LogWarning($"[FsmMaster] Action reorder for state '{ov.StateName}' on fsm '{fsm.Name}' expects {ov.OriginalIndices.Count} action(s) but found {original.Length}; skipping.");
+            return;
+        }
+
+        var reordered = new FsmStateAction[original.Length];
+        for (int i = 0; i < original.Length; i++)
+        {
+            reordered[i] = original[ov.OriginalIndices[i]];
+        }
+
+        state.Actions = reordered;
+
+        FsmEditSet active = GetOrCreateActiveEditSet(fsmKey);
+        active.ActionReorders.RemoveAll(r => r.StateName == ov.StateName);
+
+        bool isIdentity = true;
+        for (int i = 0; i < ov.OriginalIndices.Count; i++)
+        {
+            if (ov.OriginalIndices[i] != i)
+            {
+                isIdentity = false;
+                break;
+            }
+        }
+
+        if (!isIdentity)
+        {
+            active.ActionReorders.Add(ov);
+        }
+
+        PruneActiveEditSetIfEmpty(fsmKey);
+        BumpEditGeneration();
+    }
+
+    // Returns this live instance's action array exactly as it stood before FsmMaster ever reordered it,
+    // capturing it lazily (once per instance) on that instance's first reorder - the same reasoning as
+    // every other Apply* method's pristine capture, just object-reference-keyed (via each action's own
+    // .State.Fsm back-reference) instead of value-keyed, since duplicate FSM instances don't share
+    // FsmStateAction objects.
+    private FsmStateAction[] GetOrCaptureOriginalActionOrder(string fsmKey, Fsm fsm, string stateName, FsmState state)
+    {
+        FsmPristineSnapshot snapshot = GetOrCreateSnapshot(fsmKey);
+        if (!snapshot.OriginalActionOrders.TryGetValue(stateName, out List<FsmStateAction[]>? perInstance))
+        {
+            perInstance = new List<FsmStateAction[]>();
+            snapshot.OriginalActionOrders[stateName] = perInstance;
+        }
+
+        FsmStateAction[]? captured = perInstance.Find(arr => arr.Length > 0 && arr[0].State.Fsm == fsm);
+        if (captured == null)
+        {
+            captured = (FsmStateAction[])state.Actions.Clone();
+            perInstance.Add(captured);
+        }
+
+        return captured;
+    }
+
+    // Moves the recorded ActionIndex of every override addressing an action in stateName (field/enabled
+    // overrides, neutered-action bookkeeping) the same way MoveAction just moved the action array itself -
+    // otherwise the next Reset/reapply would resolve a stale index to whatever action now happens to sit
+    // there instead of the one the override was actually recorded against. Same reindex rule a plain
+    // List<T>.RemoveAt(from)+Insert(to) implies for every other element: the moved action's own overrides
+    // jump straight to toIndex; everything strictly between from and to shifts one slot the other way;
+    // anything outside that range is untouched.
+    private void RemapActionIndicesForMove(string fsmKey, string stateName, int fromIndex, int toIndex)
+    {
+        static int Remap(int index, int from, int to)
+        {
+            if (index == from)
+            {
+                return to;
+            }
+
+            if (from < to)
+            {
+                return index > from && index <= to ? index - 1 : index;
+            }
+
+            return index >= to && index < from ? index + 1 : index;
+        }
+
+        FsmEditSet active = GetOrCreateActiveEditSet(fsmKey);
+        foreach (ActionFieldOverride ov in active.ActionFieldOverrides)
+        {
+            if (ov.StateName == stateName)
+            {
+                ov.ActionIndex = Remap(ov.ActionIndex, fromIndex, toIndex);
+            }
+        }
+
+        foreach (ActionEnabledOverride ov in active.ActionEnabledOverrides)
+        {
+            if (ov.StateName == stateName)
+            {
+                ov.ActionIndex = Remap(ov.ActionIndex, fromIndex, toIndex);
+            }
+        }
+
+        // SequencerOverride.ActionIndex is deliberately NOT remapped here - despite the field name, it
+        // holds a rank among this state's own Random-event-family actions (FsmActionSequencer.
+        // IndexRandomEventAction), not a raw array position, and is recomputed live from the array's
+        // current order on every read rather than dereferenced positionally like the overrides above.
+        // Moving a Random-family action past a non-Random one never changes any rank; the gap is moving it
+        // past one or more OTHER Random-family actions, which does shift their relative rank order and
+        // isn't corrected here - a pre-existing sequencer install on one of that group could end up
+        // addressing a different one. Flagging this as a known limitation rather than guessing at a fix.
+
+        FsmPristineSnapshot snapshot = GetOrCreateSnapshot(fsmKey);
+        foreach (ActionFieldOverride ov in snapshot.OriginalValues.ActionFieldOverrides)
+        {
+            if (ov.StateName == stateName)
+            {
+                ov.ActionIndex = Remap(ov.ActionIndex, fromIndex, toIndex);
+            }
+        }
+
+        foreach (ActionEnabledOverride ov in snapshot.OriginalValues.ActionEnabledOverrides)
+        {
+            if (ov.StateName == stateName)
+            {
+                ov.ActionIndex = Remap(ov.ActionIndex, fromIndex, toIndex);
+            }
+        }
+
+        // snapshot.OriginalValues.SequencerOverrides is never populated (sequencer pristine state lives in
+        // InstalledSequencers/InjectedExitActions' object-reference bookkeeping instead - see
+        // RemoveInstalledSequencerFor), so there's nothing to remap there.
+
+        if (snapshot.NeuteredActionIndices.TryGetValue(stateName, out List<int>? neutered))
+        {
+            for (int i = 0; i < neutered.Count; i++)
+            {
+                neutered[i] = Remap(neutered[i], fromIndex, toIndex);
+            }
+        }
     }
 
     // ---- States ----
@@ -1531,6 +1903,24 @@ internal sealed class FsmEditManager
     {
         foreach (Fsm fsm in instances)
         {
+            // Restored before every other per-action override below, mirroring ApplyEditSet's own
+            // ordering (structural first) - reassigns the exact original array reference captured on
+            // this instance's first reorder, so no recomputation is needed here at all.
+            foreach (KeyValuePair<string, List<FsmStateAction[]>> entry in snapshot.OriginalActionOrders)
+            {
+                FsmState? state = fsm.GetState(entry.Key);
+                if (state == null)
+                {
+                    continue;
+                }
+
+                FsmStateAction[]? original = entry.Value.Find(arr => arr.Length > 0 && arr[0].State.Fsm == fsm);
+                if (original != null)
+                {
+                    state.Actions = original;
+                }
+            }
+
             foreach (VariableOverride ov in snapshot.OriginalValues.VariableOverrides)
             {
                 NamedVariable? variable = fsm.Variables.FindVariable(ov.Name);
@@ -1555,6 +1945,11 @@ internal sealed class FsmEditManager
             foreach (ActionFieldOverride ov in snapshot.OriginalValues.ActionFieldOverrides)
             {
                 RestoreActionField(fsm, ov);
+            }
+
+            foreach (ActionEnabledOverride ov in snapshot.OriginalValues.ActionEnabledOverrides)
+            {
+                RestoreActionEnabled(fsm, ov);
             }
 
             foreach (TransitionRetarget original in snapshot.OriginalValues.TransitionRetargets)

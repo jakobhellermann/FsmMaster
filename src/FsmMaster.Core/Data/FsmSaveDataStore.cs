@@ -255,12 +255,16 @@ internal static class FsmSaveDataStore
     private const string KeyValueSeparator = "=";
     private const string PatternSeparator = ", ";
 
+    // KNOWN GAP: missing ActionReorder entries (FsmEditModels.cs) - ActionReorder has its own, more
+    // serious problem (see FsmEditManager.MoveAction/ApplyActionReorder) that needs fixing before it's
+    // worth wire-serializing at all, so it still silently doesn't survive Save/Load.
     [Serializable]
     private sealed class FsmEditSetWire
     {
         public string FsmKey = "";
         public List<string> VariableOverrides = new();
         public List<string> ActionFieldOverrides = new();
+        public List<string> ActionEnabledOverrides = new();
         public List<string> DisabledStates = new();
         public List<string> TransitionRetargets = new();
         public List<string> SequencerOverrides = new();
@@ -317,6 +321,15 @@ internal static class FsmSaveDataStore
                 "field", ov.FieldName,
                 "array", ov.ArrayIndex.ToString(CultureInfo.InvariantCulture),
                 "value", ov.StringValue));
+        }
+
+        foreach (ActionEnabledOverride ov in edits.ActionEnabledOverrides)
+        {
+            wire.ActionEnabledOverrides.Add(JoinPairs(
+                "state", ov.StateName,
+                "action", ov.ActionIndex.ToString(CultureInfo.InvariantCulture),
+                "type", ov.ExpectedActionTypeName,
+                "enabled", ov.Enabled.ToString(CultureInfo.InvariantCulture)));
         }
 
         wire.DisabledStates.AddRange(edits.DisabledStates);
@@ -378,6 +391,18 @@ internal static class FsmSaveDataStore
                 FieldName = p["field"],
                 ArrayIndex = p.TryGetValue("array", out string? arrayIndex) ? int.Parse(arrayIndex, CultureInfo.InvariantCulture) : -1,
                 StringValue = p["value"],
+            });
+        }
+
+        foreach (string s in wire.ActionEnabledOverrides)
+        {
+            Dictionary<string, string> p = SplitPairs(s);
+            edits.ActionEnabledOverrides.Add(new ActionEnabledOverride
+            {
+                StateName = p["state"],
+                ActionIndex = int.Parse(p["action"], CultureInfo.InvariantCulture),
+                ExpectedActionTypeName = p["type"],
+                Enabled = bool.Parse(p["enabled"]),
             });
         }
 
