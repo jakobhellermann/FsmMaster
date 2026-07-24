@@ -44,6 +44,12 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
     private const float RowIndentDesign = 4f;
     private const float FieldIndentDesign = 14f;
 
+    // Thin divider drawn under each array (action-field array or FsmArray variable) - see
+    // AddArraySeparatorRow. Deliberately much thinner than a row and with a small gap on either side, so
+    // it reads as a cap on that one array rather than another row of content.
+    private const float ArraySeparatorHeightDesign = 2f;
+    private const float ArraySeparatorGapDesign = 3f;
+
     // Inner top/bottom padding within a section block (CanvasSectionBlock) and the vertical gap left
     // between one block and the next - see BeginBlock/EndBlock. Blocks themselves still span the
     // section's full width (no horizontal inset, matching the divider they replace) - it's each block's
@@ -77,6 +83,8 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
     private static float RowIndent => UICommon.ScaleWidth(RowIndentDesign);
     private static float FieldIndent => UICommon.ScaleWidth(FieldIndentDesign);
     private static float ArrayElementIndent => FieldIndent + UICommon.ScaleWidth(12f);
+    private static float ArraySeparatorHeight => UICommon.ScaleHeight(ArraySeparatorHeightDesign);
+    private static float ArraySeparatorGap => UICommon.ScaleHeight(ArraySeparatorGapDesign);
     private static float BlockPadding => UICommon.ScaleHeight(BlockPaddingDesign);
     private static float BlockGap => UICommon.ScaleHeight(BlockGapDesign);
     private static float BlockRightGap => UICommon.ScaleWidth(BlockRightGapDesign);
@@ -723,6 +731,8 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
             }, labelColor);
         }
 
+        AddArraySeparatorRow(content, cursor, FieldIndent);
+
         // Re-reads element i of this same array field directly off the live action each time - array
         // is only this frame's snapshot (from FsmDataCollector), so index i's own value must be
         // re-fetched through the live field reference, not through the captured array/element objects.
@@ -807,6 +817,7 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
         if (!FsmEditManager.IsSupportedArrayElementType(array.ElementType))
         {
             AddReadOnlyRow(content, cursor, $"{variableName} ({array.ElementType})", () => string.Join(", ", Array.ConvertAll(array.Values, x => x?.ToString() ?? string.Empty)), _ui.ReadOnlyColor, FieldIndent);
+            AddArraySeparatorRow(content, cursor, FieldIndent);
             return;
         }
 
@@ -867,6 +878,8 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
                 return ReadCurrentElementText();
             });
         }
+
+        AddArraySeparatorRow(content, cursor, FieldIndent);
     }
 
     private void AddNamedVariableGroup<T>(CanvasPanel content, RowCursor cursor, string fsmKey, string typeName, T[] items) where T : NamedVariable
@@ -1726,6 +1739,25 @@ internal sealed class FsmActiveStatePanel : CanvasPanel
 
         block.Selected = true;
         _selectedBlock = block;
+    }
+
+    // Partial-width divider capping off one array (action-field array or FsmArray variable) - starts at
+    // the same indent as the array's own label/element rows rather than the block's full width (unlike
+    // AddSectionHeaderRow's divider-replacement, which spans from RowIndent), so it reads as scoped to
+    // that one array rather than a section-wide separator. Called once after an array's rows are done,
+    // both to set it apart from whatever field follows and, when a block has more than one array, from
+    // the next array's own rows.
+    private void AddArraySeparatorRow(CanvasPanel content, RowCursor cursor, float indent)
+    {
+        cursor.Y += ArraySeparatorGap;
+
+        CanvasImage line = content.Add(new CanvasImage($"Row{cursor.Count++}", _ui));
+        line.Tint = _ui.PanelBorder;
+        line.LocalPosition = new Vector2(indent, cursor.Y);
+        line.Size = new Vector2(Mathf.Max(0f, _scrollView.Size.x - indent - BlockRightGap), ArraySeparatorHeight);
+        line.Build();
+
+        cursor.Y += ArraySeparatorHeight + ArraySeparatorGap;
     }
 
     private void AddLabelOnlyRow(CanvasPanel content, RowCursor cursor, string label, Color color, float indent)
