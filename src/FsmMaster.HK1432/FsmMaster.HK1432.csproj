@@ -6,8 +6,8 @@
        FsmMaster.Core's FsmStateChangeBridge.cs for why. No source of its own: every .cs file below is
        the real FsmMaster.HK1578 source, compiled a second time against hk1432's own Managed folder.
 
-       Machine-local install paths (HK1432ManagedFolder/HK1432ModsFolder) come from LocalBuild.props via
-       Directory.Build.props; absent on CI, so the game references and deploy target below are guarded. -->
+       HK1432ModsFolder comes from LocalBuild.props via Directory.Build.props; absent on CI, so the
+       deploy target below is guarded. -->
   <PropertyGroup>
     <PackageLicenseExpression>EUPL-1.2</PackageLicenseExpression>
     <!-- net35, not net472: hk1432's Unity ships the Mono 2.0/.NET 3.5 class library profile (its
@@ -68,85 +68,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Reference Include="Assembly-CSharp">
-      <HintPath>$(HK1432ManagedFolder)/Assembly-CSharp.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine">
-      <HintPath>$(HK1432ManagedFolder)/UnityEngine.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.CoreModule">
-      <HintPath>$(HK1432ManagedFolder)/UnityEngine.CoreModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.IMGUIModule">
-      <HintPath>$(HK1432ManagedFolder)/UnityEngine.IMGUIModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.UI">
-      <HintPath>$(HK1432ManagedFolder)/UnityEngine.UI.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.UIModule">
-      <HintPath>$(HK1432ManagedFolder)/UnityEngine.UIModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.TextRenderingModule">
-      <HintPath>$(HK1432ManagedFolder)/UnityEngine.TextRenderingModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <!-- hk1432's older Unity engine version names this module "InputModule" rather than
-         "InputLegacyModule" (hk1578's own name for the same DLL, per its own Managed folder) - only the
-         reference filename differs, the types Core/this loader actually use from it are unaffected. -->
-    <Reference Include="UnityEngine.InputModule">
-      <HintPath>$(HK1432ManagedFolder)/UnityEngine.InputModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.Physics2DModule">
-      <HintPath>$(HK1432ManagedFolder)/UnityEngine.Physics2DModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.ImageConversionModule">
-      <HintPath>$(HK1432ManagedFolder)/UnityEngine.ImageConversionModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.AudioModule">
-      <HintPath>$(HK1432ManagedFolder)/UnityEngine.AudioModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.JSONSerializeModule">
-      <HintPath>$(HK1432ManagedFolder)/UnityEngine.JSONSerializeModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="PlayMaker">
-      <HintPath>$(HK1432ManagedFolder)/PlayMaker.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="MMHOOK_Assembly-CSharp">
-      <HintPath>$(HK1432ManagedFolder)/MMHOOK_Assembly-CSharp.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="MMHOOK_PlayMaker">
-      <HintPath>$(HK1432ManagedFolder)/MMHOOK_PlayMaker.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="MonoMod.RuntimeDetour">
-      <HintPath>$(HK1432ManagedFolder)/MonoMod.RuntimeDetour.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="MonoMod.Utils">
-      <HintPath>$(HK1432ManagedFolder)/MonoMod.Utils.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Mono.Cecil">
-      <HintPath>$(HK1432ManagedFolder)/Mono.Cecil.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Newtonsoft.Json">
-      <HintPath>$(HK1432ManagedFolder)/Newtonsoft.Json.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
+    <PackageReference Include="HollowKnight.GameLibs" Version="[1.0.0-hollowknight.1.4.3.2.api74hksr]" PrivateAssets="all" NoWarn="NU1608" />
   </ItemGroup>
 
   <ItemGroup>

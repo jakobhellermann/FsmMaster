@@ -60,13 +60,4 @@
     <HK1578ModsFolder Condition="'$(HK1578Folder)' != ''">$(HK1578ManagedFolder)\Mods</HK1578ModsFolder>
   </PropertyGroup>
 
-  <!--
-  CI-only fallback: fetch-hk-refs.sh (run as a workflow step before `dotnet build`) clones the
-  private Refasmer-stripped reference-assembly stub repo and writes this file, setting whichever
-  HK*ManagedFolder above is still blank (i.e. no LocalBuild.props / real game install present) to
-  point at the stubs instead. Gitignored, absent for ordinary contributor builds - a fresh clone
-  with no local game installs and no CI token still builds Core + Silksong; the HK targets are
-  the only ones that need either a local install or this CI fallback to compile.
-  -->
-  <Import Condition="Exists('$(RepoRoot)CIRefs.props')" Project="$(RepoRoot)CIRefs.props" />
 </Project>

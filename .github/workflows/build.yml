@@ -1,22 +1,12 @@
 name: Build
 
-# Validation build. Runs directly on pushes to master, and is called by pr.yml for pull
-# requests (which has to run in the base repo's trust context to get the reference-assembly
-# token - see that file).
-
 on:
   push:
     branches: [master]
-  workflow_call:
-    inputs:
-      ref:
-        description: Commit to check out. Empty means the ref that triggered the run.
-        type: string
-        required: false
-        default: ''
+  pull_request:
 
 concurrency:
-  group: build-${{ inputs.ref || github.ref }}
+  group: build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -31,7 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
           persist-credentials: false
 
       - name: Setup .NET
@@ -39,33 +28,11 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Fetch Hollow Knight reference assemblies
-        env:
-          FSMMASTER_HK_REFS_TOKEN: ${{ secrets.FSMMASTER_HK_REFS_TOKEN }}
-        run: ./fetch-hk-refs.sh
-
-      - name: Select build scope
-        run: |
-          if [ ! -f CIRefs.props ]; then
-            echo "::warning::No Hollow Knight reference assemblies available - building the Silksong target only. The HK1221/HK1315/HK1432/HK1578 targets are not validated by this run."
-            echo "BUILD_TARGET=src/FsmMaster.Silksong/FsmMaster.Silksong.csproj" >> "$GITHUB_ENV"
-          elif [ "${HK1315_REFS_AVAILABLE:-false}" != "true" ]; then
-            # hk1315's stubs don't exist yet in the private refs repo (see fetch-hk-refs.sh) - drop
-            # it from a scratch copy of the solution rather than failing every PR on an unresolvable
-            # reference until that catches up. Every other target still builds and validates normally.
-            echo "::warning::No hk1315 reference assemblies available yet - building every other target, HK1315 is not validated by this run."
-            cp FsmMaster.sln FsmMaster.CI.sln
-            dotnet sln FsmMaster.CI.sln remove src/FsmMaster.HK1315/FsmMaster.HK1315.csproj
-            echo "BUILD_TARGET=FsmMaster.CI.sln" >> "$GITHUB_ENV"
-          else
-            echo "BUILD_TARGET=FsmMaster.sln" >> "$GITHUB_ENV"
-          fi
-
       - name: Restore
-        run: dotnet restore "$BUILD_TARGET"
+        run: dotnet restore FsmMaster.sln
 
       - name: Build
-        run: dotnet build "$BUILD_TARGET" --configuration Release --no-restore
+        run: dotnet build FsmMaster.sln --configuration Release --no-restore
 
       - name: Upload release zips
         uses: actions/upload-artifact@v4

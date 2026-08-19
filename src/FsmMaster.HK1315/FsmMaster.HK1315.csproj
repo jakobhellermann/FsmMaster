@@ -7,11 +7,8 @@
        .cs file below is the real FsmMaster.HK1578 source, compiled a third time against hk1315's own
        Managed folder.
 
-       Machine-local install paths (HK1315ManagedFolder/HK1315ModsFolder) come from LocalBuild.props via
-       Directory.Build.props; absent on CI until the private FsmMaster-hk-refs stub repo grows an
-       hk1315/ folder (see fetch-hk-refs.sh's HK1315_REFS_AVAILABLE check and build.yml's handling of
-       it), so the game references and deploy target below are guarded the same way the other three
-       loaders' are. -->
+       HK1315ModsFolder comes from LocalBuild.props via Directory.Build.props; absent on CI, so the
+       deploy target below is guarded. -->
   <PropertyGroup>
     <PackageLicenseExpression>EUPL-1.2</PackageLicenseExpression>
     <!-- net35, not net472: hk1315's mscorlib metadata version is v2.0.50727 (checked directly against
@@ -72,52 +69,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Unlike hk1432/hk1578, hk1315's Unity engine still ships one monolithic UnityEngine.dll rather
-         than the split UnityEngine.*Module.dll set - confirmed directly against
-         agent-context/hk1315/Managed, which has no *Module.dll files at all, the same shape as
-         hk1221's Managed folder. Every UnityEngine.* type the borrowed hk1578 source references lives
-         inside this one assembly on this engine version, so only it needs referencing (no per-module
-         Reference entries the way FsmMaster.HK1432.csproj has). -->
-    <Reference Include="Assembly-CSharp">
-      <HintPath>$(HK1315ManagedFolder)/Assembly-CSharp.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine">
-      <HintPath>$(HK1315ManagedFolder)/UnityEngine.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.UI">
-      <HintPath>$(HK1315ManagedFolder)/UnityEngine.UI.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="PlayMaker">
-      <HintPath>$(HK1315ManagedFolder)/PlayMaker.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="MMHOOK_Assembly-CSharp">
-      <HintPath>$(HK1315ManagedFolder)/MMHOOK_Assembly-CSharp.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="MMHOOK_PlayMaker">
-      <HintPath>$(HK1315ManagedFolder)/MMHOOK_PlayMaker.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="MonoMod.RuntimeDetour">
-      <HintPath>$(HK1315ManagedFolder)/MonoMod.RuntimeDetour.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="MonoMod.Utils">
-      <HintPath>$(HK1315ManagedFolder)/MonoMod.Utils.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Mono.Cecil">
-      <HintPath>$(HK1315ManagedFolder)/Mono.Cecil.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Newtonsoft.Json">
-      <HintPath>$(HK1315ManagedFolder)/Newtonsoft.Json.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
+    <PackageReference Include="HollowKnight.GameLibs" Version="[1.0.0-hollowknight.1.3.1.5.api74hksr]" PrivateAssets="all" NoWarn="NU1608" />
   </ItemGroup>
 
   <ItemGroup>

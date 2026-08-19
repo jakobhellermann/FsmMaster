@@ -69,19 +69,6 @@ jobs:
             echo "PLATFORMS=$PLATFORMS"
           } >> "$GITHUB_ENV"
 
-      - name: Fetch Hollow Knight reference assemblies
-        # Only the Hollow Knight targets need these; silksong's game assemblies come from NuGet,
-        # so a silksong-only release must not be held up by them.
-        if: contains(env.PLATFORMS, 'hk')
-        env:
-          FSMMASTER_HK_REFS_TOKEN: ${{ secrets.FSMMASTER_HK_REFS_TOKEN }}
-        run: |
-          ./fetch-hk-refs.sh
-          if [ ! -f CIRefs.props ]; then
-            echo "::error::This release includes Hollow Knight targets, but FSMMASTER_HK_REFS_TOKEN is not configured."
-            exit 1
-          fi
-
       - name: Build and stage each platform
         run: |
           mkdir -p staging

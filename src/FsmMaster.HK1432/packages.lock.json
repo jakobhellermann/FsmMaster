@@ -2,6 +2,12 @@
   "version": 1,
   "dependencies": {
     ".NETFramework,Version=v3.5": {
+      "HollowKnight.GameLibs": {
+        "type": "Direct",
+        "requested": "[1.0.0-hollowknight.1.4.3.2.api74hksr, 1.0.0-hollowknight.1.4.3.2.api74hksr]",
+        "resolved": "1.0.0-hollowknight.1.4.3.2.api74hksr",
+        "contentHash": "ZD6kHUTzmM/gkpgHND3Hw07usyO8z3M9x1QSKA6EhuWv61Xm6TatA+8B+eEyTtpuRkK5jNti+bQEyg50bX9c9w=="
+      },
       "ILRepack.Lib.MSBuild.Task": {
         "type": "Direct",
         "requested": "[2.0.34, )",

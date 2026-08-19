@@ -1,7 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- Machine-local install paths (HK1578ManagedFolder/HK1578ModsFolder) come from LocalBuild.props
-       via Directory.Build.props; absent on CI, so the game references and deploy target below are
-       guarded. -->
+  <!-- HK1578ModsFolder comes from LocalBuild.props via Directory.Build.props; absent on CI, so the
+       deploy target below is guarded. -->
   <PropertyGroup>
     <PackageLicenseExpression>EUPL-1.2</PackageLicenseExpression>
     <TargetFramework>net472</TargetFramework>
@@ -40,88 +39,8 @@
     <PackageReference Include="ILRepack.Lib.MSBuild.Task" Version="2.0.34" PrivateAssets="all" />
   </ItemGroup>
 
-  <!-- Local game/engine/loader assembly references - this loader generation ships MonoMod and its own
-       HookGen'd MMHOOK_*.dll assemblies inside the installed Modding API's own Managed folder (same
-       relationship BepInEx has to HarmonyX), so none of these need ILRepack embedding the way hk1221's
-       old-loader HarmonyX chain does - see platform-inventory.md's hooking-library table. Everything
-       here is Private="False": loader-provided, not shipped in FsmMaster's own output. -->
   <ItemGroup>
-    <Reference Include="Assembly-CSharp">
-      <HintPath>$(HK1578ManagedFolder)/Assembly-CSharp.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine">
-      <HintPath>$(HK1578ManagedFolder)/UnityEngine.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.CoreModule">
-      <HintPath>$(HK1578ManagedFolder)/UnityEngine.CoreModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.IMGUIModule">
-      <HintPath>$(HK1578ManagedFolder)/UnityEngine.IMGUIModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.UI">
-      <HintPath>$(HK1578ManagedFolder)/UnityEngine.UI.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.UIModule">
-      <HintPath>$(HK1578ManagedFolder)/UnityEngine.UIModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.TextRenderingModule">
-      <HintPath>$(HK1578ManagedFolder)/UnityEngine.TextRenderingModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.InputLegacyModule">
-      <HintPath>$(HK1578ManagedFolder)/UnityEngine.InputLegacyModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.Physics2DModule">
-      <HintPath>$(HK1578ManagedFolder)/UnityEngine.Physics2DModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.ImageConversionModule">
-      <HintPath>$(HK1578ManagedFolder)/UnityEngine.ImageConversionModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.AudioModule">
-      <HintPath>$(HK1578ManagedFolder)/UnityEngine.AudioModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.JSONSerializeModule">
-      <HintPath>$(HK1578ManagedFolder)/UnityEngine.JSONSerializeModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="PlayMaker">
-      <HintPath>$(HK1578ManagedFolder)/PlayMaker.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="MMHOOK_Assembly-CSharp">
-      <HintPath>$(HK1578ManagedFolder)/MMHOOK_Assembly-CSharp.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="MMHOOK_PlayMaker">
-      <HintPath>$(HK1578ManagedFolder)/MMHOOK_PlayMaker.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="MonoMod.RuntimeDetour">
-      <HintPath>$(HK1578ManagedFolder)/MonoMod.RuntimeDetour.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="MonoMod.Utils">
-      <HintPath>$(HK1578ManagedFolder)/MonoMod.Utils.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Mono.Cecil">
-      <HintPath>$(HK1578ManagedFolder)/Mono.Cecil.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="Newtonsoft.Json">
-      <HintPath>$(HK1578ManagedFolder)/Newtonsoft.Json.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
+    <PackageReference Include="HollowKnight.GameLibs" Version="[1.0.0-hollowknight.1.5.78.11833.api77]" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>

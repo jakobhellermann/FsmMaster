@@ -11,6 +11,12 @@
           "MonoMod.RuntimeDetour": "22.1.29.1"
         }
       },
+      "HollowKnight.GameLibs": {
+        "type": "Direct",
+        "requested": "[1.0.0-hollowknight.1.2.2.1.api42hksr, 1.0.0-hollowknight.1.2.2.1.api42hksr]",
+        "resolved": "1.0.0-hollowknight.1.2.2.1.api42hksr",
+        "contentHash": "QjmqJIoVdgVpu7w9zb1paIFLTu0xJMLx64peau/jDHH4YrT90+kkiUIdglEdwNih9n7eeqTK0iGBJxcJYceXGw=="
+      },
       "ILRepack.Lib.MSBuild.Task": {
         "type": "Direct",
         "requested": "[2.0.34, )",
