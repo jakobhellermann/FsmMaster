@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-#if NET35 || NET472
+#if !SILKSONG
 namespace System.Diagnostics.CodeAnalysis
 {
     // Both net35's and net472's mscorlib predate C#'s nullable-reference-type analysis attributes

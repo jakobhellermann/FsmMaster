@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-#if NET35 || NET472
+#if !SILKSONG
 using System;
 using HutongGames.PlayMaker;
 

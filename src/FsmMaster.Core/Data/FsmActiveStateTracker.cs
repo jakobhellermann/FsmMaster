@@ -36,7 +36,7 @@ internal sealed class FsmActiveStateTracker
     {
         public Fsm Instance = null!;
         public Action<FsmState> Handler = null!;
-#if NET35 || NET472
+#if !SILKSONG
         // Bridge-side handler, wired to only fire for this entry's own Instance - FsmStateChangeBridge
         // is a single process-wide event covering every live Fsm, not a per-instance one.
         public Action<Fsm, FsmState>? BridgeHandler;
@@ -76,7 +76,7 @@ internal sealed class FsmActiveStateTracker
             // a freshly-Awoken FSM (FsmTabManager.RebindAfterRefresh). The old instance's own
             // subscription would otherwise sit there forever, since nothing else ever tears it down
             // once its owning scene is gone.
-#if NET35 || NET472
+#if !SILKSONG
             FsmStateChangeBridge.StateEntered -= existing.BridgeHandler;
 #else
             existing.Instance.StateChanged -= existing.Handler;
@@ -85,7 +85,7 @@ internal sealed class FsmActiveStateTracker
         }
 
         var entry = new TrackedFsm { Instance = instance };
-#if NET35 || NET472
+#if !SILKSONG
         entry.BridgeHandler = (fsm, state) =>
         {
             if (ReferenceEquals(fsm, entry.Instance) && state != null)
@@ -119,7 +119,7 @@ internal sealed class FsmActiveStateTracker
             // last thing holding a reference to it) is dropped.
             if (entry.Instance.FsmComponent == null || !_visibleThisFrame.Contains(fsmKey))
             {
-#if NET35 || NET472
+#if !SILKSONG
                 FsmStateChangeBridge.StateEntered -= entry.BridgeHandler;
 #else
                 entry.Instance.StateChanged -= entry.Handler;
@@ -203,7 +203,7 @@ internal sealed class FsmActiveStateTracker
     {
         foreach (TrackedFsm entry in _tracked.Values)
         {
-#if NET35 || NET472
+#if !SILKSONG
             FsmStateChangeBridge.StateEntered -= entry.BridgeHandler;
 #else
             entry.Instance.StateChanged -= entry.Handler;

@@ -6,7 +6,7 @@
        colliding with same-named assemblies other mods - or the game's own Managed folder - may already
        have loaded at a different version. FsmMaster.dll is listed first so its own types stay public
        and its assembly attributes are kept; everything merged in after it gets internalized. -->
-  <Target Name="ILRepacker" AfterTargets="Build">
+  <Target Name="ILRepacker" AfterTargets="Build" Condition="'$(RepackDependencies)' == 'true'">
     <ItemGroup>
       <MergeAssemblies Include="$(TargetPath)" />
       <MergeAssemblies Include="@(ReferenceCopyLocalPaths)" Condition="'%(ReferenceCopyLocalPaths.Extension)' == '.dll'" />
