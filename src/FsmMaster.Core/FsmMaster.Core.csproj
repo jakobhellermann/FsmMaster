@@ -6,7 +6,9 @@
   reference stubs or HKBuildUtils) - not yet wired up.
   -->
   <PropertyGroup>
-    <TargetFrameworks>net35;net472;netstandard2.1</TargetFrameworks>
+    <TargetFrameworks>netstandard2.1</TargetFrameworks>
+    <TargetFrameworks Condition="'$(HK1578ManagedFolder)' != ''">net472;$(TargetFrameworks)</TargetFrameworks>
+    <TargetFrameworks Condition="'$(HK1221ManagedFolder)' != ''">net35;$(TargetFrameworks)</TargetFrameworks>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <EnableNETAnalyzers>True</EnableNETAnalyzers>

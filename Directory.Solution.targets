@@ -1,0 +1,17 @@
+<Project>
+  <!-- Drops HK loaders whose game references aren't configured, so a plain solution build works without HK installs. -->
+  <ItemGroup>
+    <_SkippedHkProject Include="$(MSBuildThisFileDirectory)src/FsmMaster.HK1221/FsmMaster.HK1221.csproj" Condition="'$(HK1221ManagedFolder)' == ''" />
+    <_SkippedHkProject Include="$(MSBuildThisFileDirectory)src/FsmMaster.HK1315/FsmMaster.HK1315.csproj" Condition="'$(HK1315ManagedFolder)' == '' Or '$(HK1221ManagedFolder)' == ''" />
+    <_SkippedHkProject Include="$(MSBuildThisFileDirectory)src/FsmMaster.HK1432/FsmMaster.HK1432.csproj" Condition="'$(HK1432ManagedFolder)' == '' Or '$(HK1578ManagedFolder)' == ''" />
+    <_SkippedHkProject Include="$(MSBuildThisFileDirectory)src/FsmMaster.HK1578/FsmMaster.HK1578.csproj" Condition="'$(HK1578ManagedFolder)' == ''" />
+  </ItemGroup>
+
+  <!-- Runs as a target because the metaproject adds its ProjectReference items after this file is evaluated. -->
+  <Target Name="SkipUnconfiguredHkProjects" BeforeTargets="Build;Rebuild;Clean;_LoadRestoreGraphEntryPoints" Condition="'@(_SkippedHkProject)' != ''">
+    <Warning Text="Skipping %(_SkippedHkProject.Filename): Hollow Knight references not configured (see LocalBuild.example.props)." />
+    <ItemGroup>
+      <ProjectReference Remove="@(_SkippedHkProject)" />
+    </ItemGroup>
+  </Target>
+</Project>

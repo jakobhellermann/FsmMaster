@@ -1,0 +1,4 @@
+<Project>
+  <!-- Brings HK*ManagedFolder into the solution metaproject for Directory.Solution.targets. -->
+  <Import Project="$(MSBuildThisFileDirectory)Directory.Build.props" />
+</Project>
