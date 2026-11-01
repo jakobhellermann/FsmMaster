@@ -70,7 +70,7 @@
     <!-- Release (and any Debug build without a scripts folder configured) installs into the plugin's
          own folder under BepInEx/plugins. When a scripts folder is set, Debug builds are copied loose
          into it instead so BepInEx's ScriptEngine hot-reloads them. -->
-    <CopyDestinationFolder Condition="'$(SilksongPluginsFolder)' != ''">$(SilksongPluginsFolder)/$(AssemblyName)/</CopyDestinationFolder>
+    <CopyDestinationFolder Condition="'$(CopyDestinationFolder)' == '' And '$(SilksongPluginsFolder)' != ''">$(SilksongPluginsFolder)/$(AssemblyName)/</CopyDestinationFolder>
     <CopyDestinationFolder Condition="'$(Configuration)' == 'Debug' And '$(SilksongScriptsFolder)' != ''">$(SilksongScriptsFolder)/</CopyDestinationFolder>
   </PropertyGroup>
 

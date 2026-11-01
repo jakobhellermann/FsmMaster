@@ -40,7 +40,7 @@
   <!-- Structural sub-paths derived from the machine-local roots above. Not machine-specific, so
        they live here rather than in LocalBuild.props; each stays empty when its root is unset. -->
   <PropertyGroup>
-    <SilksongPluginsFolder Condition="'$(SilksongFolder)' != ''">$(SilksongFolder)\BepInEx\plugins</SilksongPluginsFolder>
+    <SilksongPluginsFolder Condition="'$(SilksongFolder)' != '' And '$(SilksongPluginsFolder)' == ''">$(SilksongFolder)\BepInEx\plugins</SilksongPluginsFolder>
 
     <HK1221ManagedFolder Condition="'$(HK1221Folder)' != ''">$(HK1221Folder)\hollow_knight_Data\Managed</HK1221ManagedFolder>
     <HK1221ModsFolder Condition="'$(HK1221Folder)' != ''">$(HK1221ManagedFolder)\Mods</HK1221ModsFolder>
