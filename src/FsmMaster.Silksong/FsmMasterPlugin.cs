@@ -30,7 +30,7 @@ public partial class FsmMasterPlugin : BaseUnityPlugin
 
     private UICommon? _uiCommon;
     private GameObject? _canvasGameObject;
-    private bool _ownsEventSystem;
+    private GameObject? _ownedEventSystem;
     private FsmRightPanel? _rightPanel;
     private FsmMonitorPanel? _monitorPanel;
     private FsmPanelLayoutConfig? _rightPanelLayout;
@@ -431,10 +431,9 @@ public partial class FsmMasterPlugin : BaseUnityPlugin
     {
         if (FindFirstObjectByType<EventSystem>() == null)
         {
-            var eventSystemObject = new GameObject("FsmMasterEventSystem");
-            eventSystemObject.AddComponent<EventSystem>();
-            eventSystemObject.AddComponent<StandaloneInputModule>();
-            _ownsEventSystem = true;
+            _ownedEventSystem = new GameObject("FsmMasterEventSystem");
+            _ownedEventSystem.AddComponent<EventSystem>();
+            _ownedEventSystem.AddComponent<StandaloneInputModule>();
         }
 
         _canvasGameObject = new GameObject("FsmMasterCanvas");
@@ -477,15 +476,10 @@ public partial class FsmMasterPlugin : BaseUnityPlugin
             _canvasGameObject = null;
         }
 
-        if (_ownsEventSystem)
+        if (_ownedEventSystem != null)
         {
-            EventSystem? eventSystem = FindFirstObjectByType<EventSystem>();
-            if (eventSystem != null)
-            {
-                Destroy(eventSystem.gameObject);
-            }
-
-            _ownsEventSystem = false;
+            Destroy(_ownedEventSystem);
+            _ownedEventSystem = null;
         }
 
         _uiCommon?.Destroy();
