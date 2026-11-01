@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using HutongGames.PlayMaker;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -62,10 +64,8 @@ internal sealed class FsmGraphOverlay
     private const float ActiveTransitionLineThickness = 6f;
     private const float SelectedTransitionOutlineMargin = 3f;
 
-    // "Segoe UI" is only guaranteed present on Windows - CreateDynamicFontFromOSFont's string[]
-    // overload picks the first installed name it finds, falling through to common Linux/Mac
-    // equivalents ("DejaVu Sans" ships with most Linux distros, "Liberation Sans" is Fedora/RHEL's
-    // default, "Arial" covers Mac and Wine-mapped fonts).
+    // "Segoe UI" is only guaranteed present on Windows; "DejaVu Sans" ships with most Linux distros,
+    // "Liberation Sans" is Fedora/RHEL's default, "Arial" covers Mac and Wine-mapped fonts.
     private static readonly string[] DynamicFontNames = ["Segoe UI", "DejaVu Sans", "Liberation Sans", "Arial"];
 
     // Every named color this overlay draws with comes from the loader's own IFsmGraphColorConfig (see
@@ -758,7 +758,7 @@ internal sealed class FsmGraphOverlay
     // the graph canvas itself.
     private void DrawEditIndicator()
     {
-        _dynamicFont ??= Font.CreateDynamicFontFromOSFont(DynamicFontNames, (int)DynamicFontPointSize);
+        _dynamicFont ??= CreateDynamicFont();
 
         if (_editIndicatorStyle == null)
         {
@@ -783,17 +783,46 @@ internal sealed class FsmGraphOverlay
         GUI.Label(rect, "Fsm Edits Active", _editIndicatorStyle);
     }
 
+    // The font must be created from a single name: the string[] overload names the Font after the first
+    // array entry even if that isn't installed, and Unity 6's TextCore IMGUI resolves fonts by that name.
+    // If that fails, IMGUI silently renders the previous GUI.Label's text instead of ours.
+    private static Font CreateDynamicFont()
+    {
+        string[] installed = Font.GetOSInstalledFontNames();
+        string? name = DynamicFontNames.FirstOrDefault(n => installed.Contains(n) && CanImguiResolve(n));
+        if (name == null)
+        {
+            throw new InvalidOperationException(
+                $"[FsmMaster] None of the graph fonts are usable: {string.Join(", ", DynamicFontNames)}");
+        }
+        return Font.CreateDynamicFontFromOSFont(name, (int)DynamicFontPointSize);
+    }
+
+#if NETSTANDARD2_1
+    // On Linux, TextCore can't load OS-backed Fonts directly and falls back to a family-name lookup with
+    // style "Regular" - which fails for e.g. DejaVu Sans, whose regular style is named "Book".
+    private static bool CanImguiResolve(string familyName)
+    {
+        var asset = UnityEngine.TextCore.Text.FontAsset.CreateFontAsset(familyName, "Regular");
+        if (asset == null)
+        {
+            return false;
+        }
+        UnityEngine.Object.Destroy(asset);
+        return true;
+    }
+#else
+    private static bool CanImguiResolve(string familyName) => true;
+#endif
+
     // Builds the title/event GUIStyles from a dynamic OS font. Gated on its own _zoom-only check
     // rather than the full layout cacheStale flag, since text styling depends only on zoom (font
     // size must scale with it) and not on pan/selection/canvas-size - rebuilding a GUIStyle is cheap
     // (a managed object, no texture work) but there's no reason to redo it on every pan-only frame.
     private void EnsureTextStyles()
     {
-        // CreateDynamicFontFromOSFont's string[] overload picks the first installed name from
-        // DynamicFontNames it finds; the requested rendered size is controlled entirely by each
-        // GUIStyle's own fontSize below, so this base size is arbitrary and never itself re-created
-        // per zoom level.
-        _dynamicFont ??= Font.CreateDynamicFontFromOSFont(DynamicFontNames, (int)DynamicFontPointSize);
+        // The rendered size comes from each GUIStyle's fontSize, so the font's base size is arbitrary.
+        _dynamicFont ??= CreateDynamicFont();
 
         if (_titleStyle != null && Mathf.Approximately(_textStyleBuiltForZoom, _zoom))
         {
