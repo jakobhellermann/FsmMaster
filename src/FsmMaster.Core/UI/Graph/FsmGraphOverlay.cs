@@ -815,6 +815,10 @@ internal sealed class FsmGraphOverlay
     private static bool CanImguiResolve(string familyName) => true;
 #endif
 
+    // A recently taken transition's line: active color and thickness, fading back to its default.
+    private (Color Color, float Thickness) FadeFromActiveLine(Color defaultColor, float fadeT) =>
+        (Color.Lerp(_colors.ActiveStateColor.Value, defaultColor, fadeT), Mathf.Lerp(ActiveTransitionLineThickness, TransitionLineThickness, fadeT));
+
     // Builds the title/event GUIStyles from a dynamic OS font. Gated on its own _zoom-only check
     // rather than the full layout cacheStale flag, since text styling depends only on zoom (font
     // size must scale with it) and not on pan/selection/canvas-size - rebuilding a GUIStyle is cheap
@@ -838,10 +842,7 @@ internal sealed class FsmGraphOverlay
             clipping = TextClipping.Clip,
             wordWrap = false,
         };
-        // Actual text color is set per-node right before each label draw (see the label pass in
-        // DrawCachedGraph) - state nodes use their own StateColors[ColorIndex] entry, so this default
-        // is never what actually renders for them; it only matters for _globalEventStyle below,
-        // which never gets overridden per-node.
+        // Actual text color is set per label right before each draw (see the label pass in DrawCachedGraph).
         _titleStyle.normal.textColor = Color.white;
 
         _eventStyle = new GUIStyle(_titleStyle) { fontStyle = FontStyle.Normal };
@@ -1476,7 +1477,13 @@ internal sealed class FsmGraphOverlay
                     // Arrow geometry is only collected here - actually drawn in one GL batch below,
                     // once every pseudo/edge line for this frame has been gathered.
                     Color pseudoLineColor = pseudo.IsDisabled ? _colors.DisabledTransitionLineColor.Value : _colors.GlobalTransitionColor.Value;
-                    _currentCache.LineDrawBuffer.Add((pseudo.ArrowPoints, pseudoLineColor, TransitionLineThickness, ArrowheadLength, 0f));
+                    float pseudoThickness = TransitionLineThickness;
+                    float? pseudoFadeT = pseudo.IsDisabled ? null : _activeStateTracker.GetTransitionFadeProgress(fsmKey, null, pseudo.EventName);
+                    if (pseudoFadeT.HasValue)
+                    {
+                        (pseudoLineColor, pseudoThickness) = FadeFromActiveLine(pseudoLineColor, pseudoFadeT.Value);
+                    }
+                    _currentCache.LineDrawBuffer.Add((pseudo.ArrowPoints, pseudoLineColor, pseudoThickness, ArrowheadLength * (pseudoThickness / TransitionLineThickness), 0f));
                 }
             }
 
@@ -1519,6 +1526,16 @@ internal sealed class FsmGraphOverlay
                         : selectionUsesColor ? _colors.SelectedStateColor.Value
                         : lineColor;
                     float rowThickness = row.IsDisabled ? TransitionLineThickness : lineThickness;
+
+                    float? rowFadeT = row.IsDisabled || nodeIsActiveForLines ? null : _activeStateTracker.GetTransitionFadeProgress(fsmKey, node.Name, row.EventName);
+                    if (rowFadeT.HasValue)
+                    {
+                        (Color fadedColor, rowThickness) = FadeFromActiveLine(lineColor, rowFadeT.Value);
+                        if (!selectionUsesColor)
+                        {
+                            rowColor = fadedColor;
+                        }
+                    }
                     float rowArrowLength = ArrowheadLength * (rowThickness / TransitionLineThickness);
 
                     if (selectionUsesOutline)
@@ -1604,6 +1621,19 @@ internal sealed class FsmGraphOverlay
             // rings extending outward), so the result matches the old single-pass appearance.
             _dynamicChromeBuffer.Clear();
             _chromeTarget = _dynamicChromeBuffer;
+            if (_currentCache.GlobalPseudoNodeCache != null)
+            {
+                foreach (GlobalPseudoNodeLayout pseudo in _currentCache.GlobalPseudoNodeCache)
+                {
+                    float? pseudoFadeT = pseudo.IsDisabled ? null : _activeStateTracker.GetTransitionFadeProgress(fsmKey, null, pseudo.EventName);
+                    if (pseudoFadeT.HasValue && pseudo.Rect.Overlaps(visibleRect))
+                    {
+                        Color fill = Color.Lerp(_colors.ActiveTitleBackgroundColor.Value, _colors.GlobalPseudoNodeColor.Value, pseudoFadeT.Value);
+                        AddRoundedRectOutlineToChromeBuffer(pseudo.Rect, fill, _colors.GlobalPseudoNodeOutlineColor.Value, NodeBorderThickness * _zoom);
+                    }
+                }
+            }
+
             foreach (NodeLayout node in _currentCache.NodeLayoutCache.Values)
             {
                 if (!node.ScreenRect.Overlaps(visibleRect))
@@ -1618,9 +1648,9 @@ internal sealed class FsmGraphOverlay
                 bool isSelected = _selectedStateName != null && node.Name == _selectedStateName;
                 float? fadeT = node.IsDisabled ? null : _activeStateTracker.GetFadeProgress(fsmKey, node.Name);
 
-                if (isActive || isSelected || fadeT.HasValue)
+                if (isActive || isSelected || fadeT.HasValue || _activeStateTracker.HasFadingTransitionFrom(fsmKey, node.Name))
                 {
-                    GatherNodeChrome(node, isActive, isSelected, fadeT);
+                    GatherNodeChrome(node, isActive, isSelected, fadeT, fsmKey);
                 }
             }
 
@@ -1732,6 +1762,10 @@ internal sealed class FsmGraphOverlay
                             continue;
                         }
 
+                        float? pseudoFadeT = pseudo.IsDisabled ? null : _activeStateTracker.GetTransitionFadeProgress(fsmKey, null, pseudo.EventName);
+                        _globalEventStyle!.normal.textColor = pseudoFadeT.HasValue
+                            ? Color.Lerp(_colors.ActiveTitleTextColor.Value, _colors.GlobalPseudoNodeTextColor.Value, pseudoFadeT.Value)
+                            : _colors.GlobalPseudoNodeTextColor.Value;
                         GUI.Label(Offset(pseudo.Rect, regionOffset), pseudo.EventName, _globalEventStyle);
                     }
                 }
@@ -1746,19 +1780,22 @@ internal sealed class FsmGraphOverlay
                     // Default title text is white, switching to the fixed ActiveTitleTextColor (black,
                     // matching ActiveTitleBackgroundColor's light blue - see the chrome pass above) only
                     // for the active state's own name. Event/transition text stays this state's own
-                    // (desaturated) TransitionColors entry regardless of activity; only the state name
-                    // itself, its title/chrome background, its outline ring, and its outgoing lines (see
-                    // the chrome and line-color passes above) pick up the active styling. Both styles are
+                    // (desaturated) TransitionColors entry, except for a recently taken transition's row,
+                    // which fades from ActiveTitleTextColor like its row background. Both styles are
                     // shared/mutable, so this only needs setting once per node right before its labels
                     // draw, not rebuilt from scratch.
                     bool nodeIsActive = !node.IsDisabled && activeStateName != null && node.Name == activeStateName;
                     _titleStyle!.normal.textColor = node.IsDisabled ? _colors.DisabledTitleTextColor.Value : nodeIsActive ? _colors.ActiveTitleTextColor.Value : Color.white;
-                    _eventStyle!.normal.textColor = node.IsDisabled ? _colors.DisabledEventTextColor.Value : _colors.TransitionColors[node.ColorIndex].Value;
+                    Color eventTextColor = node.IsDisabled ? _colors.DisabledEventTextColor.Value : _colors.TransitionColors[node.ColorIndex].Value;
 
                     GUI.Label(Offset(node.TitleRect, regionOffset), node.Name, _titleStyle);
 
                     foreach (TransitionRow row in node.Rows)
                     {
+                        float? rowFadeT = row.IsDisabled ? null : _activeStateTracker.GetTransitionFadeProgress(fsmKey, node.Name, row.EventName);
+                        _eventStyle!.normal.textColor = rowFadeT.HasValue
+                            ? Color.Lerp(_colors.ActiveTitleTextColor.Value, eventTextColor, rowFadeT.Value)
+                            : eventTextColor;
                         GUI.Label(Offset(row.Rect, regionOffset), row.EventName, _eventStyle);
                     }
                 }
@@ -2402,7 +2439,8 @@ internal sealed class FsmGraphOverlay
     // state for the per-frame highlight overlay (only the few affected nodes, into _dynamicChromeBuffer,
     // drawn on top). Splitting it this way is what keeps the base geometry cached across a boss's rapid
     // state changes - only the highlight redraws each frame. See DrawCachedGraph's two chrome passes.
-    private void GatherNodeChrome(NodeLayout node, bool isActive, bool isSelected, float? fadeT)
+    // fsmKey is only passed for the dynamic overlay, where recently taken transitions tint their rows.
+    private void GatherNodeChrome(NodeLayout node, bool isActive, bool isSelected, float? fadeT, string? fsmKey = null)
     {
         // One shared radius for every rounded rect belonging to this node (rings, outline, title, last
         // row) - see GetNodeCornerRadius for why they must share one value rather than each clamping its
@@ -2498,13 +2536,18 @@ internal sealed class FsmGraphOverlay
             TransitionRow row = node.Rows[i];
             bool isLastRow = i == node.Rows.Count - 1;
 
+            float? rowFadeT = fsmKey == null || row.IsDisabled ? null : _activeStateTracker.GetTransitionFadeProgress(fsmKey, node.Name, row.EventName);
+            Color rowFillColor = rowFadeT.HasValue
+                ? Color.Lerp(_colors.ActiveTitleBackgroundColor.Value, _colors.TransitionRowBackgroundColor.Value, rowFadeT.Value)
+                : _colors.TransitionRowBackgroundColor.Value;
+
             if (isLastRow)
             {
-                AddRoundedRectToChromeBuffer(row.Rect, cornerRadius, _colors.TransitionRowBackgroundColor.Value, roundTop: false, roundBottom: true);
+                AddRoundedRectToChromeBuffer(row.Rect, cornerRadius, rowFillColor, roundTop: false, roundBottom: true);
             }
             else
             {
-                AddFilledRectToChromeBuffer(row.Rect, _colors.TransitionRowBackgroundColor.Value);
+                AddFilledRectToChromeBuffer(row.Rect, rowFillColor);
             }
 
             if (!standardBoxStyle && !isLastRow)

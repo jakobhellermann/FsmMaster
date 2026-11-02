@@ -51,6 +51,10 @@ internal sealed class FsmActiveStateTracker
         // before that (see CommitFrame) - a resumed state shows its normal active look immediately
         // rather than resuming a stale, partially-faded one.
         public readonly Dictionary<string, float> FadingStates = new();
+
+        // Keyed by (source state, event); a null source state is a global transition.
+        public readonly HashSet<(string? FromState, string EventName)> TakenSinceCommit = new();
+        public readonly Dictionary<(string? FromState, string EventName), float> FadingTransitions = new();
     }
 
     private readonly Dictionary<string, TrackedFsm> _tracked = new();
@@ -90,15 +94,68 @@ internal sealed class FsmActiveStateTracker
         {
             if (ReferenceEquals(fsm, entry.Instance) && state != null)
             {
-                entry.EnteredSinceCommit.Add(state.Name);
+                RecordStateEntered(entry, state);
             }
         };
         FsmStateChangeBridge.StateEntered += entry.BridgeHandler;
 #else
-        entry.Handler = state => entry.EnteredSinceCommit.Add(state.Name);
+        entry.Handler = state => RecordStateEntered(entry, state);
         instance.StateChanged += entry.Handler;
 #endif
         _tracked[fsmKey] = entry;
+    }
+
+    private static void RecordStateEntered(TrackedFsm entry, FsmState state)
+    {
+        entry.EnteredSinceCommit.Add(state.Name);
+
+        (string?, string)? taken = GetTakenTransition(entry.Instance, state);
+        if (taken.HasValue)
+        {
+            entry.TakenSinceCommit.Add(taken.Value);
+        }
+    }
+
+    // LastTransition isn't cleared when a state is entered without a transition (SwitchState from an
+    // action, GotoPreviousState), so it only counts if it leads here from the state just left or is global.
+    private static (string? FromState, string EventName)? GetTakenTransition(Fsm fsm, FsmState entered)
+    {
+        FsmTransition? transition = fsm.LastTransition;
+        if (transition == null || transition.ToState != entered.Name)
+        {
+            return null;
+        }
+
+        FsmState? from = fsm.PreviousActiveState;
+        if (from != null && ContainsReference(from.Transitions, transition))
+        {
+            return (from.Name, transition.EventName);
+        }
+
+        if (ContainsReference(fsm.GlobalTransitions, transition))
+        {
+            return (null, transition.EventName);
+        }
+
+        return null;
+    }
+
+    private static bool ContainsReference(FsmTransition[]? transitions, FsmTransition transition)
+    {
+        if (transitions == null)
+        {
+            return false;
+        }
+
+        foreach (FsmTransition candidate in transitions)
+        {
+            if (ReferenceEquals(candidate, transition))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // Called once per rendered frame - gated by the caller (FsmGraphOverlay.OnGUI) on
@@ -144,25 +201,14 @@ internal sealed class FsmActiveStateTracker
             }
             entry.EnteredSinceCommit.Clear();
 
-            if (entry.FadingStates.Count > 0)
+            foreach ((string?, string) transition in entry.TakenSinceCommit)
             {
-                List<string>? expired = null;
-                foreach (KeyValuePair<string, float> fade in entry.FadingStates)
-                {
-                    if (Time.unscaledTime - fade.Value >= FadeDurationSeconds)
-                    {
-                        (expired ??= new List<string>()).Add(fade.Key);
-                    }
-                }
-
-                if (expired != null)
-                {
-                    foreach (string stateName in expired)
-                    {
-                        entry.FadingStates.Remove(stateName);
-                    }
-                }
+                entry.FadingTransitions[transition] = Time.unscaledTime;
             }
+            entry.TakenSinceCommit.Clear();
+
+            RemoveExpiredFades(entry.FadingStates);
+            RemoveExpiredFades(entry.FadingTransitions);
         }
 
         if (toRemove != null)
@@ -176,6 +222,31 @@ internal sealed class FsmActiveStateTracker
         _visibleThisFrame.Clear();
     }
 
+    private static void RemoveExpiredFades<TKey>(Dictionary<TKey, float> fades)
+    {
+        if (fades.Count == 0)
+        {
+            return;
+        }
+
+        List<TKey>? expired = null;
+        foreach (KeyValuePair<TKey, float> fade in fades)
+        {
+            if (Time.unscaledTime - fade.Value >= FadeDurationSeconds)
+            {
+                (expired ??= new List<TKey>()).Add(fade.Key);
+            }
+        }
+
+        if (expired != null)
+        {
+            foreach (TKey key in expired)
+            {
+                fades.Remove(key);
+            }
+        }
+    }
+
     // 0 = just stopped being active (still essentially the active color), 1 = fade complete (fully the
     // default color) - null when stateName isn't currently fading, whether because it's genuinely
     // active right now or because it settled back to its default look some time ago.
@@ -187,6 +258,35 @@ internal sealed class FsmActiveStateTracker
         }
 
         return Mathf.Clamp01((Time.unscaledTime - startTime) / FadeDurationSeconds);
+    }
+
+    // Same 0..1 progress as GetFadeProgress, for a transition taken recently; null fromState = global.
+    public float? GetTransitionFadeProgress(string fsmKey, string? fromState, string eventName)
+    {
+        if (!_tracked.TryGetValue(fsmKey, out TrackedFsm? entry) || !entry.FadingTransitions.TryGetValue((fromState, eventName), out float startTime))
+        {
+            return null;
+        }
+
+        return Mathf.Clamp01((Time.unscaledTime - startTime) / FadeDurationSeconds);
+    }
+
+    public bool HasFadingTransitionFrom(string fsmKey, string? fromState)
+    {
+        if (!_tracked.TryGetValue(fsmKey, out TrackedFsm? entry))
+        {
+            return false;
+        }
+
+        foreach ((string? FromState, string EventName) transition in entry.FadingTransitions.Keys)
+        {
+            if (transition.FromState == fromState)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // Lets the renderer skip its own chrome cache while a fade is actually in progress for this FSM -
