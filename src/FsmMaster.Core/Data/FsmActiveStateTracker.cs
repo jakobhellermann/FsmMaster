@@ -30,6 +30,7 @@ namespace FsmMaster;
 // scene, since most of those never have a graph open to show this on.
 internal sealed class FsmActiveStateTracker
 {
+    // In scaled game time, so fades freeze while the game is paused (timeScale 0) like the FSMs themselves.
     private const float FadeDurationSeconds = 1f;
 
     private sealed class TrackedFsm
@@ -46,7 +47,7 @@ internal sealed class FsmActiveStateTracker
         // more than one entry when the FSM chained several transitions within a single Update().
         public readonly HashSet<string> EnteredSinceCommit = new();
 
-        // "Was active, no longer is" - stateName -> Time.unscaledTime it stopped being active. Removed
+        // "Was active, no longer is" - stateName -> Time.time it stopped being active. Removed
         // once its fade completes (FadeDurationSeconds elapsed) or the same state becomes active again
         // before that (see CommitFrame) - a resumed state shows its normal active look immediately
         // rather than resuming a stale, partially-faded one.
@@ -196,14 +197,14 @@ internal sealed class FsmActiveStateTracker
                 }
                 else
                 {
-                    entry.FadingStates[stateName] = Time.unscaledTime;
+                    entry.FadingStates[stateName] = Time.time;
                 }
             }
             entry.EnteredSinceCommit.Clear();
 
             foreach ((string?, string) transition in entry.TakenSinceCommit)
             {
-                entry.FadingTransitions[transition] = Time.unscaledTime;
+                entry.FadingTransitions[transition] = Time.time;
             }
             entry.TakenSinceCommit.Clear();
 
@@ -232,7 +233,7 @@ internal sealed class FsmActiveStateTracker
         List<TKey>? expired = null;
         foreach (KeyValuePair<TKey, float> fade in fades)
         {
-            if (Time.unscaledTime - fade.Value >= FadeDurationSeconds)
+            if (Time.time - fade.Value >= FadeDurationSeconds)
             {
                 (expired ??= new List<TKey>()).Add(fade.Key);
             }
@@ -257,7 +258,7 @@ internal sealed class FsmActiveStateTracker
             return null;
         }
 
-        return Mathf.Clamp01((Time.unscaledTime - startTime) / FadeDurationSeconds);
+        return Mathf.Clamp01((Time.time - startTime) / FadeDurationSeconds);
     }
 
     // Same 0..1 progress as GetFadeProgress, for a transition taken recently; null fromState = global.
@@ -268,7 +269,7 @@ internal sealed class FsmActiveStateTracker
             return null;
         }
 
-        return Mathf.Clamp01((Time.unscaledTime - startTime) / FadeDurationSeconds);
+        return Mathf.Clamp01((Time.time - startTime) / FadeDurationSeconds);
     }
 
     public bool HasFadingTransitionFrom(string fsmKey, string? fromState)
